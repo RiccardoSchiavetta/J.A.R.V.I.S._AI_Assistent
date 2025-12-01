@@ -6,7 +6,6 @@ Un assistente vocale AI avanzato progettato per trasformare vecchi tablet Androi
 
 Il progetto gira interamente su Termux (ambiente Linux per Android) e utilizza Google Gemini come cervello, garantendo risposte intelligenti e contestuali con una personalità personalizzata.
 
-(Sostituisci con uno screenshot vero del tuo tablet)
 
 ✨ Caratteristiche Principali
 
@@ -28,7 +27,7 @@ Dispositivo Android (Tablet o Smartphone).
 
 App Termux (da F-Droid).
 
-App Termux:API.
+App Termux:API (da F-Droid).
 
 Connessione Internet.
 
@@ -85,4 +84,4 @@ Edge-TTS (Output Vocale Neurale)
 
 Questo progetto ascolta l'audio locale per rilevare la parola chiave "Jarvis". Le registrazioni vocali vengono inviate ai server di Google (Speech-to-Text) solo quando viene rilevata attività vocale. L'API Key di Gemini è personale e non deve essere condivisa.
 
-Progetto realizzato con passione per ridare vita all'hardware datato.
+Progetto realizzato per ridare vita all'hardware datato senza dover comprare componenti esterni come un microcontrrollore un microfono e uno speaker.
