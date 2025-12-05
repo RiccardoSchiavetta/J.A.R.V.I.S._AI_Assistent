@@ -24,7 +24,7 @@ except ImportError:
 API_KEY = GEMINI_API_KEY 
 URL_GEMINI = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
-# ALIAS WAKE WORD
+# Alias wake word
 ALIAS_JARVIS = [
     "jarvis", "giarvis", "iarvis", 
     "service", "servis", "services", 
@@ -133,9 +133,9 @@ HTML_HUD = """
         }
 
         #clock-container { display: flex; align-items: baseline; gap: 20px; z-index: 2; }
-        #time { font-size: 10vw; font-weight: bold; line-height: 1; }
+        #time { font-size: 20vw; font-weight: bold; line-height: 1; }
         #seconds { font-size: 3vw; opacity: 0.8; }
-        #date { font-size: 2.5vw; margin-top: -10px; letter-spacing: 5px; opacity: 0.7; z-index: 2; }
+        #date { font-size: 3vw; margin-top: -10px; letter-spacing: 5px; opacity: 0.7; z-index: 2; }
         
         #interface {
             margin-top: 30px;
@@ -149,8 +149,8 @@ HTML_HUD = """
             box-shadow: 0 0 20px rgba(0, 255, 255, 0.1);
         }
         
-        #status { font-size: 4vw; font-weight: bold; text-transform: uppercase; animation: pulse 2s infinite; }
-        #message { font-size: 2vw; margin-top: 15px; color: #fff; font-style: italic; min-height: 1.5em; }
+        #status { font-size: 2.5vw; font-weight: bold; text-transform: uppercase; animation: pulse 2s infinite; }
+        #message { font-size: 1.5vw; margin-top: 10px; color: #fff; font-style: italic; min-height: 1.5em; }
         
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
         @keyframes spin { 100% { transform: rotate(360deg); } }
