@@ -21,6 +21,15 @@ Il progetto gira interamente su Termux (ambiente Linux per Android) e utilizza G
 * **🛠️ Ottimizzazione Hardware:** Bypassa le limitazioni audio di Android/EMUI utilizzando driver nativi Linux (`pulseaudio` e `parecord`) per un ascolto stabile in background.
 * **🔋 Always On:** Progettato per girare 24/7 su tablet collegati all'alimentazione.
 
+### 📱 Controllo App & Integrazione
+Jarvis è in grado di interagire con il sistema operativo per avviare applicazioni specifiche tramite comandi vocali (es. *"Apri Spotify"*, *"Metti la sveglia"*).
+Le app attualmente supportate di default sono:
+* **Spotify**
+* **Orologio / Sveglia**
+* **Calendario**
+
+> **Nota Tecnica:** Il sistema utilizza i "Package Name" (nomi pacchetto) Android per lanciare le app. I nomi preinseriti nel codice (es. `com.android.deskclock`) potrebbero variare in base al produttore del tuo dispositivo (Samsung, Huawei, Xiaomi, ecc.). È possibile verificarli e aggiornarli facilmente nel file `jarvis.py` utilizzando un'app come *Package Name Viewer*.
+
 ---
 
 ## 🚀 Requisiti
