@@ -7,7 +7,7 @@ import subprocess
 import threading 
 import logging 
 import struct 
-import wave   
+import wave    
 import math
 import re
 from flask import Flask, render_template_string, jsonify, Response
@@ -22,7 +22,7 @@ except ImportError:
     exit()
 
 # Configurazione Api Key
-API_KEY = GEMINI_API_KEY 
+API_KEY = GEMINI_API_KEY
 URL_GEMINI = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
 # Alias wake word
@@ -458,74 +458,6 @@ def main():
                     gestisci_risposta_e_comandi(risposta)
                 else:
                     parla("Non ho udito alcun comando, Signore.")
-                        r = requests.post(URL_GEMINI, headers=headers, data=json.dumps(payload), timeout=10)
-                        return r.json()['candidates'][0]['content']['parts'][0]['text'] if r.status_code == 200 else "Errore API"
-                    except: return "Offline"
-
-                def gestisci_risposta_e_comandi(risposta_completa):
-                    match = re.search(r'\[CMD_OPEN:(.*?)\]', risposta_completa)
-                    
-                    testo_da_dire = risposta_completa
-                    
-                    if match:
-                        pacchetto = match.group(1)
-                        testo_da_dire = risposta_completa.replace(match.group(0), "")
-                        threading.Thread(target=lancia_applicazione, args=(pacchetto,)).start()
-                        
-                    parla(testo_da_dire)
-
-                def main():
-                    global HUD_STATO, HUD_TESTO
-                    os.system("clear")
-                    os.system("termux-wake-lock")
-                    print("--- INIZIALIZZAZIONE ---")
-                    
-                    t_web = threading.Thread(target=run_web_server)
-                    t_web.daemon = True 
-                    t_web.start()
-                    print("--- INTERFACCIA: http://localhost:5000 ---")
-                    
-                    avvia_server_audio()
-                    time.sleep(2)
-                    parla(TESTO_DEFAULT)
-                    HUD_STATO = "IN ATTESA"
-                    
-                    while True:
-                        print(".", end="", flush=True)
-                        try:
-                            frase_udita = ascolta_dinamico()
-                        except:
-                            avvia_server_audio()
-                            continue
-                        
-                        if not frase_udita: continue
-                        
-                        print(f"\n[Rilevato]: {frase_udita}")
-                        
-                        parola_attivazione_trovata = any(alias in frase_udita for alias in ALIAS_JARVIS)
-
-                        if parola_attivazione_trovata:
-                            HUD_STATO = "WAKE WORD RILEVATA"
-                            os.system("termux-vibrate -d 100 > /dev/null 2>&1") 
-                            
-                            parole_nella_frase = frase_udita.split()
-                            
-                            if len(parole_nella_frase) <= 2:
-                                parla("Sì Signore?")
-                                comando_vero = ascolta_dinamico()
-                                if comando_vero:
-                                    HUD_TESTO = f"Comando: {comando_vero}"
-                                    risposta = chiedi_a_gemini(comando_vero)
-                                    gestisci_risposta_e_comandi(risposta)
-                                else:
-                                    parla("Non ho udito alcun comando, Signore.")
-                            else:
-                                HUD_TESTO = f"Comando: {frase_udita}"
-                                risposta = chiedi_a_gemini(frase_udita)
-                                gestisci_risposta_e_comandi(risposta)
-
-                if __name__ == "__main__":
-                    main()
             else:
                 HUD_TESTO = f"Comando: {frase_udita}"
                 risposta = chiedi_a_gemini(frase_udita)
