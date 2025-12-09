@@ -15,15 +15,15 @@ from gtts import gTTS
 from datetime import datetime
 
 try:
-    from config import GEMINI_API_KEY
+    from config import GROQ_API_KEY
 except ImportError:
     print("ERRORE: File config.py non trovato!")
-    print("Crea un file config.py con la variabile GEMINI_API_KEY = 'la_tua_chiave'")
+    print("Crea un file config.py con la variabile GROQ_API_KEY = 'la_tua_chiave'")
     exit()
 
 # Configurazione Api Key
-API_KEY = GEMINI_API_KEY
-URL_GEMINI = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+API_KEY = GROQ_API_KEY
+URL_GROQ = "https://api.groq.com/openai/v1/chat/completions"
 
 # Alias wake word
 ALIAS_JARVIS = [
@@ -34,8 +34,7 @@ ALIAS_JARVIS = [
     "ciao", "svegliati", "computer", "assistente"
 ]
 
-# Configurazione voce
-VOICE_NAME = "it-IT-CalimeroNeural"
+
 
 # Testo di default
 TESTO_DEFAULT = "Sistemi Online. Sono a sua piena disposizione Signore."
@@ -248,24 +247,25 @@ def lancia_applicazione(nome_pacchetto):
 def parla(testo):
     global HUD_STATO, HUD_TESTO
     if not testo: return
+    
     HUD_STATO = "PARLANDO..."
     HUD_TESTO = testo
-    testo_pulito = testo.replace("*", "").replace("#", "").replace('"', '').replace("'", "")
+    
+    testo_pulito = testo.replace('"', '').replace("'", "").replace("\n", " ").strip()
     print(f"\nJARVIS: {testo_pulito}\n")
+    
+    file_mp3 = "google_voice.mp3"
+    
     try:
-        if os.path.exists("risposta.mp3"): os.remove("risposta.mp3")
-        comando_tts = f'edge-tts --voice {VOICE_NAME} --text "{testo_pulito}" --write-media risposta.mp3 --rate=+10%'
-        exit_code = os.system(comando_tts + " > /dev/null 2>&1")
-        if exit_code == 0 and os.path.exists("risposta.mp3"):
-            os.system("mpv --no-terminal risposta.mp3 > /dev/null 2>&1")
-        else: raise Exception("Generazione fallita")
-    except Exception as e:
-        print(f"[ERRORE TTS]: {e}")
-        try:
-            tts = gTTS(text=testo_pulito, lang='it')
-            tts.save("risposta_backup.mp3")
-            os.system("mpv --no-terminal risposta_backup.mp3 > /dev/null 2>&1")
-        except: pass
+        tts = gTTS(text=testo_pulito, lang='it')
+        tts.save(file_mp3)
+        
+        if os.path.exists(file_mp3):
+            os.system(f"mpv --no-terminal {file_mp3} > /dev/null 2>&1")
+            
+    except Exception:
+        pass
+
     HUD_STATO = "IN ATTESA"
     HUD_TESTO = TESTO_DEFAULT
 
@@ -343,17 +343,21 @@ def ascolta_dinamico(nome_file="mic_monitor.wav"):
     except:
         return ""
 
-# Cervello Gemini
-def chiedi_a_gemini(domanda):
+# Cervello Groq
+def chiedi_a_groq(domanda):
     global HUD_STATO, HUD_TESTO
     HUD_STATO = "ELABORAZIONE..."
-    HUD_TESTO = f"Analisi: {domanda}..." 
-    headers = { 'Content-Type': 'application/json', 'X-goog-api-key': API_KEY }
-    data_ora = datetime.now().strftime("%A %d %B %Y, ore %H:%M")
+    HUD_TESTO = f"Analisi: {domanda}..."
     
+    headers = { 
+        'Content-Type': 'application/json', 
+        'Authorization': f'Bearer {API_KEY}' 
+    }
+    
+    data_ora = datetime.now().strftime("%A %d %B %Y, ore %H:%M")
     lista_app_str = json.dumps(LISTA_APP)
 
-    prompt = f"""
+    system_content = f"""
     [SYSTEM DATA: Data e Ora correnti: {data_ora}. Usa questi dati per contestualizzare risposte temporali.]
     [SYSTEM APPS: Ecco la lista dei pacchetti app installati sul dispositivo: {lista_app_str}]
         IDENTITÀ E RUOLO:
@@ -391,15 +395,30 @@ def chiedi_a_gemini(domanda):
         
         OBIETTIVO FINALE:
         Fornire supporto tattico e informativo con la massima efficienza e lo stile di un magiordomo inglese che ne ha viste troppe, ma rimane fedele.
-    
-
-    Utente: {domanda}
     """
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+
+    payload = {
+        "model": "llama-3.3-70b-versatile", 
+        "messages": [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": domanda}
+        ],
+        "temperature": 0.6
+    }
+    
     try:
-        r = requests.post(URL_GEMINI, headers=headers, data=json.dumps(payload), timeout=10)
-        return r.json()['candidates'][0]['content']['parts'][0]['text'] if r.status_code == 200 else "Errore API"
-    except: return "Offline"
+        r = requests.post(URL_GROQ, headers=headers, data=json.dumps(payload), timeout=10)
+        
+        if r.status_code == 200:
+            return r.json()['choices'][0]['message']['content']
+        else:
+            print(f"\n[ERRORE GROQ]: {r.status_code} - {r.text}")
+            return "I server neurali richiedono manutenzione, Signore."
+            
+    except Exception as e:
+        print(f"[ERRORE CONNESSIONE]: {e}")
+        return "Sono Offline."
+
 
 def gestisci_risposta_e_comandi(risposta_completa):
     match = re.search(r'\[CMD_OPEN:(.*?)\]', risposta_completa)
@@ -454,13 +473,13 @@ def main():
                 comando_vero = ascolta_dinamico()
                 if comando_vero:
                     HUD_TESTO = f"Comando: {comando_vero}"
-                    risposta = chiedi_a_gemini(comando_vero)
+                    risposta = chiedi_a_groq(comando_vero)
                     gestisci_risposta_e_comandi(risposta)
                 else:
                     parla("Non ho udito alcun comando, Signore.")
             else:
                 HUD_TESTO = f"Comando: {frase_udita}"
-                risposta = chiedi_a_gemini(frase_udita)
+                risposta = chiedi_a_groq(frase_udita)
                 gestisci_risposta_e_comandi(risposta)
 
 if __name__ == "__main__":
