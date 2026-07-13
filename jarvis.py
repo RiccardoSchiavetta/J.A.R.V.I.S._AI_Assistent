@@ -412,6 +412,15 @@ SALUTI: non presentarti a meno che l'utente non ti saluti. Se va dritto al punto
             total_prompt = usage.get('prompt_tokens', 0)
             print(f"[GROQ CACHE] prompt_tokens={total_prompt}, cached_tokens={cached}")
             return resp['choices'][0]['message']['content']
+        elif r.status_code == 413:
+            print("[GROQ] 413 con web_search, riprovo senza ricerca web...")
+            payload.pop("compound_custom", None)
+            r2 = requests.post(URL_GROQ, headers=headers, data=json.dumps(payload), timeout=20)
+            if r2.status_code == 200:
+                return r2.json()['choices'][0]['message']['content']
+            else:
+                print(f"\n[ERRORE GROQ RETRY]: {r2.status_code} - {r2.text}")
+                return "I server neurali richiedono manutenzione, Signore."
         else:
             print(f"\n[ERRORE GROQ]: {r.status_code} - {r.text}")
             return "I server neurali richiedono manutenzione, Signore."
