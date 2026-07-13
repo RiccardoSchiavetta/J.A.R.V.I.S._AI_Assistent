@@ -34,6 +34,13 @@ ALIAS_JARVIS = [
     "ciao", "svegliati", "computer", "assistente"
 ]
 
+# Alias comando di spegnimento
+ALIAS_SPEGNITI = [
+    "spegniti", "spegneti", "spegni ti",
+    "shutdown", "shut down", "esci",
+    "chiudi tutto", "termina", "addio"
+]
+
 
 
 # Testo di default
@@ -399,6 +406,10 @@ def chiedi_a_groq(domanda):
             - La tua risposta DEVE contenere il tag speciale: [CMD_OPEN:nome.del.pacchetto].
             - Esempio: "Certamente Signore. [CMD_OPEN:com.spotify.music] Apro Spotify."
             - Se l'app non è nella lista, spiega gentilmente che non hai accesso a quel protocollo.
+        7.  USO DELLA RICERCA WEB (OBBLIGATORIO per dati in tempo reale):
+            - Per QUALSIASI domanda su meteo, temperatura, notizie, risultati sportivi, eventi attuali, prezzi, orari o qualsiasi dato che cambia nel tempo: DEVI SEMPRE usare la ricerca web prima di rispondere.
+            - Non dire mai "non ho dati certi" su argomenti verificabili via web senza aver prima effettuato una ricerca.
+            - Usa la ricerca web anche per domande fattuali di cui non sei sicuro al 100 percento.
 
         FRASARIO TIPO (Reference Style):
         - "Agli ordini, Signore."
@@ -417,7 +428,7 @@ def chiedi_a_groq(domanda):
     user_content = f"[SYSTEM DATA: {data_ora}] [SYSTEM APPS: {lista_app_str}]\n\nDomanda: {domanda}"
 
     payload = {
-        "model": "groq/compound-mini",
+        "model": "groq/compound",
         "messages": [
             {"role": "system", "content": system_content},
             {"role": "user", "content": user_content}
@@ -492,6 +503,17 @@ def main():
         parola_attivazione_trovata = any(alias in frase_udita for alias in ALIAS_JARVIS)
 
         if parola_attivazione_trovata:
+            # Controlla se è un comando di spegnimento
+            comando_spegnimento = any(alias in frase_udita for alias in ALIAS_SPEGNITI)
+            if comando_spegnimento:
+                HUD_STATO = "SPEGNIMENTO"
+                parla("Spengo i sistemi. È stato un piacere servirla, Signore.")
+                HUD_STATO = "OFFLINE"
+                HUD_TESTO = "Sistemi Offline."
+                os.system("termux-wake-unlock > /dev/null 2>&1")
+                print("\n--- JARVIS SPENTO ---")
+                return
+
             HUD_STATO = "WAKE WORD RILEVATA"
             os.system("termux-vibrate -d 100 > /dev/null 2>&1") 
             
@@ -501,6 +523,15 @@ def main():
                 parla("Sì Signore?")
                 comando_vero = ascolta_dinamico()
                 if comando_vero:
+                    # Controlla spegnimento anche nel secondo ascolto
+                    if any(alias in comando_vero for alias in ALIAS_SPEGNITI):
+                        HUD_STATO = "SPEGNIMENTO"
+                        parla("Spengo i sistemi. È stato un piacere servirla, Signore.")
+                        HUD_STATO = "OFFLINE"
+                        HUD_TESTO = "Sistemi Offline."
+                        os.system("termux-wake-unlock > /dev/null 2>&1")
+                        print("\n--- JARVIS SPENTO ---")
+                        return
                     HUD_TESTO = f"Comando: {comando_vero}"
                     risposta = chiedi_a_groq(comando_vero)
                     gestisci_risposta_e_comandi(risposta)
