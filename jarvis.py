@@ -362,9 +362,7 @@ def chiedi_a_groq(domanda):
     data_ora = datetime.now().strftime("%A %d %B %Y, ore %H:%M")
     lista_app_str = json.dumps(LISTA_APP)
 
-    # --- System prompt STATICO: NON inserire dati dinamici qui! ---
-    # Groq cachea automaticamente il prefisso identico tra chiamate successive.
-    # Ogni token cachato NON conta ai fini del rate-limit TPM.
+    
     system_content = """
         IDENTITÀ E RUOLO:
         Sei J.A.R.V.I.S. (Just A Rather Very Intelligent System).
@@ -416,7 +414,6 @@ def chiedi_a_groq(domanda):
         RICORDA PRIMA DI RISPONDERE: risposta breve = maggiordomo efficiente. Risposta lunga = errore di sistema. Mai più di 3 frasi, mai markdown.
     """
 
-    # --- Dati dinamici nel messaggio utente (non rompono la cache del system prompt) ---
     user_content = f"[SYSTEM DATA: {data_ora}] [SYSTEM APPS: {lista_app_str}]\n\nDomanda: {domanda}"
 
     payload = {
@@ -437,7 +434,6 @@ def chiedi_a_groq(domanda):
         
         if r.status_code == 200:
             resp = r.json()
-            # --- Log cache hit per verificare che il prefix caching funzioni ---
             usage = resp.get('usage', {})
             prompt_details = usage.get('prompt_tokens_details', {})
             cached = prompt_details.get('cached_tokens', 0)
