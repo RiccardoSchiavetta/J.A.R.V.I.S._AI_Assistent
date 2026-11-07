@@ -26,6 +26,8 @@ except (ImportError, AttributeError):
 
 # Opzionali in config.py: se mancano, il calendario resta disattivato e il meteo usa i default
 GIORNI_AVANTI = getattr(config, "GIORNI_AVANTI", 7)  # quanti giorni in avanti mostrare
+# Groq cambia spesso i modelli (compound-mini e' stato spento il 21/09/2026): tienilo in config.py
+GROQ_MODEL = getattr(config, "GROQ_MODEL", "openai/gpt-oss-120b")
 
 
 def _lista_url(valore):
@@ -178,22 +180,23 @@ body.parla .a2 { animation-duration: 4s; }
     display: grid; grid-template-columns: 5fr 6fr; grid-template-rows: minmax(0, 1fr) auto;
     gap: 2.5vh 2.5vw; padding: 3vh 3vw;
 }
-#sx { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; justify-content: center; gap: 2vh; min-width: 0; }
-#dx { grid-column: 2; grid-row: 1; overflow: hidden; min-width: 0; }
+#sx { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; justify-content: space-between; gap: 2vh; min-width: 0; }
+#dx { grid-column: 2; grid-row: 1; overflow: hidden; min-width: 0; display: flex; flex-direction: column; }
+#eventi { flex: 1; min-height: 0; overflow: hidden; }
 #barra { grid-column: 1 / span 2; grid-row: 2; }
 .pannello { border: 1px solid var(--linea); border-radius: 12px; padding: 2vh 1.6vw; background: rgba(0,0,0,.6); }
 .titolo { font-size: min(1.5vw, 2.6vh); letter-spacing: 4px; opacity: .65; margin-bottom: 1.4vh; display: flex; justify-content: space-between; }
 .titolo .agg { color: var(--warn); letter-spacing: 1px; }
 
-#clock { font-size: min(9.5vw, 24vh); font-weight: bold; line-height: 1; white-space: nowrap; text-shadow: 0 0 18px rgba(0,229,255,.7); }
-#seconds { font-size: .22em; opacity: .75; margin-left: .3em; text-shadow: none; }
+#clock { font-size: min(12vw, 30vh); font-weight: bold; line-height: 1; white-space: nowrap; text-shadow: 0 0 18px rgba(0,229,255,.7); }
+#seconds { font-size: .2em; opacity: .75; margin-left: .3em; text-shadow: none; }
 #date { font-size: min(2.2vw, 4vh); letter-spacing: 3px; opacity: .75; }
 
 #meteo { display: flex; flex-wrap: wrap; align-items: baseline; gap: .6vh 1.6vw; }
 #meteo .titolo { width: 100%; margin-bottom: .6vh; }
-.m-temp { font-size: min(5.5vw, 10vh); font-weight: bold; line-height: 1; }
-.m-desc { font-size: min(2.2vw, 4vh); color: #fff; text-transform: uppercase; }
-.m-det { width: 100%; font-size: min(1.7vw, 3vh); opacity: .9; display: flex; flex-wrap: wrap; gap: .4vh 1.6vw; }
+.m-temp { font-size: min(7vw, 13vh); font-weight: bold; line-height: 1; }
+.m-desc { font-size: min(2.6vw, 4.6vh); color: #fff; text-transform: uppercase; }
+.m-det { width: 100%; font-size: min(2vw, 3.5vh); opacity: .9; display: flex; flex-wrap: wrap; gap: .4vh 1.6vw; }
 .warn { color: var(--warn); }
 #timers { font-size: min(2.4vw, 4.4vh); color: var(--warn); }
 #timers div { margin-top: .6vh; }
@@ -201,8 +204,9 @@ body.parla .a2 { animation-duration: 4s; }
 .giorno { font-size: min(1.5vw, 2.6vh); letter-spacing: 4px; opacity: .6; margin: 1.6vh 0 .6vh; }
 .giorno:first-of-type { margin-top: 0; }
 .ev { display: flex; gap: 1.4vw; align-items: baseline; font-size: min(2.2vw, 4.2vh); padding: .7vh 0; border-bottom: 1px solid rgba(0,229,255,.12); }
-.ev-ora { flex: 0 0 5.2em; }
-.ev-tit { flex: 1; min-width: 0; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-ora { flex: 0 0 3.7em; }
+.ev-ora.tg { flex-basis: 4.9em; }
+.ev-tit { flex: 1; min-width: 0; color: #fff; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .ev-tra { flex: 0 0 auto; font-size: .8em; opacity: .8; }
 .ev.presto, .ev.presto .ev-tit { color: var(--warn); }
 .ev.incorso, .ev.incorso .ev-tit { color: var(--ok); }
@@ -216,7 +220,7 @@ body.parla .a2 { animation-duration: 4s; }
 /* Modalita' notte: solo l'orario, attenuato */
 body.notte #dx, body.notte #barra, body.notte #reactor, body.notte #meteo, body.notte #date { display: none; }
 body.notte #app { display: flex; align-items: center; justify-content: center; }
-body.notte #sx { align-items: center; }
+body.notte #sx { align-items: center; justify-content: center; }
 body.notte #clock { opacity: .35; }
 
 @media (orientation: portrait) {
@@ -231,10 +235,14 @@ body.notte #clock { opacity: .35; }
 <div id="reactor"><div class="anello a1"></div><div class="anello a2"></div></div>
 <div id="app">
     <section id="sx">
-        <div id="clock"><span id="time">00:00</span><span id="seconds">00</span></div>
-        <div id="date">CARICAMENTO...</div>
-        <div id="meteo" class="pannello"></div>
-        <div id="timers"></div>
+        <div id="alto">
+            <div id="clock"><span id="time">00:00</span><span id="seconds">00</span></div>
+            <div id="date">CARICAMENTO...</div>
+        </div>
+        <div id="basso">
+            <div id="timers"></div>
+            <div id="meteo" class="pannello"></div>
+        </div>
     </section>
     <section id="dx" class="pannello">
         <div class="titolo"><span>PROSSIMI EVENTI</span><span id="cal-agg" class="agg"></span></div>
@@ -328,11 +336,13 @@ function renderEventi() {
         const incorso = ini <= now && now < fin;
         const presto = !incorso && (ini - now) < 30 * 60000;
         const riga = el('div', 'ev' + (incorso ? ' incorso' : presto ? ' presto' : ''));
-        riga.appendChild(el('span', 'ev-ora', e.tutto_giorno ? 'GIORNATA' : pad(ini.getHours()) + ':' + pad(ini.getMinutes())));
+        riga.appendChild(el('span', 'ev-ora' + (e.tutto_giorno ? ' tg' : ''), e.tutto_giorno ? 'GIORNATA' : pad(ini.getHours()) + ':' + pad(ini.getMinutes())));
         riga.appendChild(el('span', 'ev-tit', e.titolo));
         riga.appendChild(el('span', 'ev-tra', e.tutto_giorno ? '' : (incorso ? 'IN CORSO' : tra(ini - now))));
         box.appendChild(riga);
     });
+    while (box.scrollHeight > box.clientHeight + 1 && box.lastChild) box.removeChild(box.lastChild);
+    while (box.lastChild && box.lastChild.classList.contains('giorno')) box.removeChild(box.lastChild);
 }
 
 function renderMeteo() {
@@ -871,6 +881,17 @@ def _registra_scambio(domanda, risposta):
     ULTIMO_SCAMBIO = time.time()
 
 
+def _errore_groq_parlato(codice):
+    """Messaggio parlato in base al motivo reale dell'errore (il dettaglio resta nel terminale)."""
+    if codice == 429:
+        return "Ho raggiunto il limite di richieste, Signore. Riprovi tra un minuto."
+    if codice in (401, 403):
+        return "La mia chiave di accesso non risulta valida, Signore."
+    if codice == 404:
+        return "Il modello configurato non è più disponibile, Signore."
+    return "I server neurali richiedono manutenzione, Signore."
+
+
 def chiedi_a_groq(domanda):
     global HUD_STATO, HUD_TESTO
     HUD_STATO = "ELABORAZIONE..."
@@ -879,7 +900,6 @@ def chiedi_a_groq(domanda):
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {API_KEY}',
-        'Groq-Model-Version': 'latest'
     }
 
     if time.time() - ULTIMO_SCAMBIO > SCADENZA_CRONOLOGIA:
@@ -890,32 +910,40 @@ def chiedi_a_groq(domanda):
     sistema = {"role": "system", "content": SYSTEM_PROMPT}
     utente = {"role": "user", "content": user_content}
 
+    # gpt-oss e' un modello a ragionamento: i token di ragionamento contano nel limite,
+    # quindi max_completion_tokens e' ampio (la risposta parlata resta breve per il system prompt).
     payload = {
-        "model": "groq/compound-mini",
+        "model": GROQ_MODEL,
         "messages": [sistema] + list(CRONOLOGIA) + [utente],
         "temperature": 0.6,
-        "max_tokens": 180,
-        "compound_custom": {
-            "tools": {"enabled_tools": ["web_search"]}
-        }
+        "max_completion_tokens": 1000,
+        "reasoning_effort": "low",
+        "tools": [{"type": "browser_search"}],  # ricerca web lato server, il modello decide se usarla
     }
 
     try:
-        r = requests.post(URL_GROQ, headers=headers, data=json.dumps(payload), timeout=20)
+        r = requests.post(URL_GROQ, headers=headers, data=json.dumps(payload), timeout=30)
 
         if r.status_code == 413:
+            # Piano gratuito: 8000 token al minuto. Se la ricerca web fa sforare, si risponde senza.
             print("[GROQ] 413, riprovo senza ricerca web e senza cronologia...")
-            payload.pop("compound_custom", None)
-            payload["messages"] = [sistema, utente]
-            r = requests.post(URL_GROQ, headers=headers, data=json.dumps(payload), timeout=20)
+            payload.pop("tools", None)
+            utente_senza_web = {"role": "user", "content": user_content +
+                                "\n[Ricerca web momentaneamente non disponibile: se serve un dato in tempo reale, dillo.]"}
+            payload["messages"] = [sistema, utente_senza_web]
+            r = requests.post(URL_GROQ, headers=headers, data=json.dumps(payload), timeout=30)
 
         if r.status_code == 200:
-            risposta = r.json()['choices'][0]['message']['content'] or ""
+            scelta = r.json()['choices'][0]
+            risposta = (scelta['message'].get('content') or "").strip()
+            if not risposta:
+                print(f"[GROQ] risposta vuota, finish_reason={scelta.get('finish_reason')}")
+                return "Non sono riuscito a formulare una risposta, Signore."
             _registra_scambio(domanda, risposta)
             return risposta
 
         print(f"\n[ERRORE GROQ]: {r.status_code} - {r.text}")
-        return "I server neurali richiedono manutenzione, Signore."
+        return _errore_groq_parlato(r.status_code)
 
     except Exception as e:
         print(f"[ERRORE CONNESSIONE]: {e}")
