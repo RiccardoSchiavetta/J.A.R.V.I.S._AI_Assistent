@@ -25,7 +25,20 @@ except (ImportError, AttributeError):
     exit()
 
 # Opzionali in config.py: se mancano, il calendario resta disattivato e il meteo usa i default
-ICAL_URL = getattr(config, "ICAL_URL", None)      # indirizzo segreto iCal di Google Calendar
+GIORNI_AVANTI = getattr(config, "GIORNI_AVANTI", 7)  # quanti giorni in avanti mostrare
+
+
+def _lista_url(valore):
+    """Accetta una stringa o una lista di stringhe (uno o piu' feed iCal)."""
+    if not valore:
+        return []
+    if isinstance(valore, str):
+        return [valore]
+    return [u for u in valore if u]
+
+
+# Feed iCal: l'indirizzo segreto di Google Calendar, piu' eventuali altri calendari (es. Formula 1)
+ICAL_URLS = _lista_url(getattr(config, "ICAL_URLS", None) or getattr(config, "ICAL_URL", None))
 METEO_LAT = getattr(config, "METEO_LAT", 41.686)  # default: Velletri
 METEO_LON = getattr(config, "METEO_LON", 12.778)
 
@@ -94,12 +107,12 @@ MAX_SCAMBI = 4
 SCADENZA_CRONOLOGIA = 180  # secondi di inattivita' dopo i quali si dimentica tutto
 
 # Configurazione App (solo questi pacchetti possono essere lanciati)
-LISTA_APP = {
+LISTA_APP = getattr(config, "LISTA_APP", {
     "spotify": "com.spotify.music",
     "orologio": "com.android.deskclock",
     "sveglia": "com.android.deskclock",
     "calendario": "com.android.calendar"
-}
+})
 PACCHETTI_CONSENTITI = set(LISTA_APP.values())
 
 # Dati per la dashboard (aggiornati da un thread in background)
@@ -306,7 +319,7 @@ function renderEventi() {
     }
     const now = new Date();
     const evs = (DASH.eventi || []).filter(e => new Date(e.fine) > now).slice(0, 7);
-    if (!evs.length) { box.appendChild(el('div', 'vuoto', 'Nessun impegno nelle prossime 48 ore')); return; }
+    if (!evs.length) { box.appendChild(el('div', 'vuoto', 'Nessun impegno in programma')); return; }
     let ultimo = '';
     evs.forEach(e => {
         const ini = new Date(e.inizio), fin = new Date(e.fine);
@@ -414,15 +427,18 @@ def _a_datetime(d):
     return datetime.combine(d, dtime.min, tzinfo=LOCALE_TZ)
 
 
-def scarica_eventi():
+FEED = {}  # indice del feed -> {"eventi": [...], "ts": datetime dell'ultimo scaricamento riuscito}
+
+
+def scarica_feed(url):
     import icalendar
     import recurring_ical_events
-    r = requests.get(ICAL_URL, timeout=20)
+    r = requests.get(url, timeout=20)
     r.raise_for_status()
     cal = icalendar.Calendar.from_ical(r.content)
     ora = adesso()
     eventi = []
-    for ev in recurring_ical_events.of(cal).between(ora, ora + timedelta(hours=48)):
+    for ev in recurring_ical_events.of(cal).between(ora, ora + timedelta(days=GIORNI_AVANTI)):
         if str(ev.get("STATUS", "")).upper() == "CANCELLED":
             continue
         dtstart = ev.get("DTSTART")
@@ -445,28 +461,34 @@ def scarica_eventi():
             "inizio": inizio,
             "fine": fine,
         })
-    eventi.sort(key=lambda e: e["inizio"])
-    return eventi[:12]
+    return eventi
 
 
 def aggiorna_calendario():
-    if not ICAL_URL:
+    if not ICAL_URLS:
         with LOCK_CACHE:
             CACHE["cal_stato"] = "non_configurato"
         return
-    try:
-        eventi = scarica_eventi()
-        with LOCK_CACHE:
-            CACHE["eventi"] = eventi
-            CACHE["cal_stato"] = "ok"
-            CACHE["cal_ts"] = adesso().isoformat()
-    except Exception as e:
-        # Mai stampare il messaggio: gli errori di requests contengono l'URL segreto
-        print(f"[CALENDARIO] errore: {type(e).__name__}")
-        if isinstance(e, ImportError):
-            print("[CALENDARIO] installa: pip install icalendar recurring-ical-events tzdata")
-        with LOCK_CACHE:
-            CACHE["cal_stato"] = "errore"
+    fallito = False
+    for i, url in enumerate(ICAL_URLS):
+        try:
+            FEED[i] = {"eventi": scarica_feed(url), "ts": adesso()}
+        except Exception as e:
+            # Se un calendario fallisce si tengono i suoi ultimi eventi noti.
+            # Mai stampare il messaggio: gli errori di requests contengono l'URL segreto.
+            fallito = True
+            print(f"[CALENDARIO] calendario {i + 1} errore: {type(e).__name__}")
+            if isinstance(e, ImportError):
+                print("[CALENDARIO] installa: pip install icalendar recurring-ical-events tzdata")
+    ora = adesso()
+    eventi = sorted((ev for f in FEED.values() for ev in f["eventi"] if ev["fine"] > ora),
+                    key=lambda e: e["inizio"])[:20]
+    completo = len(FEED) == len(ICAL_URLS)
+    ts = min((f["ts"] for f in FEED.values()), default=None) if completo else None
+    with LOCK_CACHE:
+        CACHE["eventi"] = eventi
+        CACHE["cal_stato"] = "errore" if fallito else "ok"
+        CACHE["cal_ts"] = ts.isoformat() if ts else None
 
 
 CODICI_METEO = {
@@ -560,7 +582,7 @@ def riepilogo_contesto():
             else:
                 voci.append(f"{_giorno_relativo(e['inizio'])} {e['inizio']:%H:%M}: {titolo}")
         nota = " (dati non aggiornati)" if stato == "errore" else ""
-        righe.append("[CALENDARIO prossime 48 ore" + nota + ": " + ("; ".join(voci) if voci else "nessun impegno") + "]")
+        righe.append(f"[CALENDARIO prossimi {GIORNI_AVANTI} giorni" + nota + ": " + ("; ".join(voci) if voci else "nessun impegno") + "]")
     if meteo:
         parti = [f"{meteo['temp']} gradi", meteo["desc"], f"minima {meteo['min']}", f"massima {meteo['max']}"]
         if meteo["pioggia"] is not None:
@@ -934,7 +956,7 @@ def main():
     for target in (run_web_server, thread_dati, thread_promemoria):
         threading.Thread(target=target, daemon=True).start()
     print("--- INTERFACCIA: http://localhost:5000 ---")
-    if not ICAL_URL:
+    if not ICAL_URLS:
         print("[CALENDARIO] ICAL_URL non impostato in config.py: pannello calendario disattivato")
 
     avvia_server_audio()
