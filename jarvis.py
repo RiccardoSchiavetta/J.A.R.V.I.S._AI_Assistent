@@ -176,7 +176,7 @@ body.parla .a2 { animation-duration: 4s; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 
 #app {
-    position: relative; z-index: 1; height: 100%;
+    position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 1;
     display: grid; grid-template-columns: 5fr 6fr; grid-template-rows: minmax(0, 1fr) auto;
     gap: 2.5vh 2.5vw; padding: 3vh 3vw;
 }
@@ -380,11 +380,28 @@ function renderTimers() {
     });
 }
 
+let ULTIMA_ALTEZZA = 0;
+function allineaColonne() {
+    // Orario+meteo devono avere sempre la stessa altezza del pannello eventi, anche dopo
+    // lo schermo intero (alcuni Chrome Android non ricalcolano subito il layout).
+    const sx = $('sx'), dx = $('dx');
+    sx.style.height = '';
+    if (window.innerWidth > window.innerHeight && !document.body.classList.contains('notte')) {
+        const h = Math.round(dx.getBoundingClientRect().height);
+        if (h > 0) sx.style.height = h + 'px';
+    }
+    if (window.innerHeight !== ULTIMA_ALTEZZA) { ULTIMA_ALTEZZA = window.innerHeight; renderEventi(); }
+}
+window.addEventListener('resize', allineaColonne);
+window.addEventListener('orientationchange', () => setTimeout(allineaColonne, 300));
+document.addEventListener('fullscreenchange', () => { allineaColonne(); setTimeout(allineaColonne, 300); setTimeout(allineaColonne, 1000); });
+setInterval(allineaColonne, 2000);
+
 setInterval(aggiornaOrologio, 1000);
 setInterval(aggiornaStato, 1000);
 setInterval(aggiornaDash, 15000);
 setInterval(renderEventi, 30000);
-aggiornaOrologio(); aggiornaStato(); aggiornaDash();
+aggiornaOrologio(); aggiornaStato(); aggiornaDash(); allineaColonne();
 </script>
 </body>
 </html>
