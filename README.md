@@ -94,7 +94,7 @@ pkg install python pulseaudio sox ffmpeg mpv termux-api git
 Clona la repository nella cartella home di Termux.
 
 ```bash
-git clone https://github.com/TUO_UTENTE/J.A.R.V.I.S._AI_Assistent.git
+git clone https://github.com/RiccardoSchiavetta/J.A.R.V.I.S._AI_Assistent.git
 cd J.A.R.V.I.S._AI_Assistent
 ```
 
