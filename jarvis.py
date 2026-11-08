@@ -190,6 +190,14 @@ body.parla .a2 { animation-duration: 4s; }
 
 #clock { font-size: min(12vw, 30vh); font-weight: bold; line-height: 1; white-space: nowrap; text-shadow: 0 0 18px rgba(0,229,255,.7); }
 #seconds { font-size: .2em; opacity: .75; margin-left: .3em; text-shadow: none; }
+/* Molto spazio in altezza (es. schermo intero): ore sopra e minuti sotto, stesso font, nessuna deformazione */
+#sx.impilato #alto { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: row; align-items: flex-start; gap: 2.2vw; }
+#sx.impilato #clock { display: flex; align-items: flex-end; gap: .1em; font-size: var(--fs, 20vh); line-height: .84; flex: 0 0 auto; }
+#sx.impilato #ore { display: flex; flex-direction: column; }
+#sx.impilato #sep { display: none; }
+#sx.impilato #seconds { font-size: .2em; margin: 0; line-height: 1; }
+#sx.impilato #date span { display: block; }
+#sx.impilato #date { font-size: min(2vw, 3.6vh); letter-spacing: 2px; line-height: 1.6; align-self: center; flex: 1; min-width: 0; }
 #date { font-size: min(2.2vw, 4vh); letter-spacing: 3px; opacity: .75; }
 
 #meteo { display: flex; flex-wrap: wrap; align-items: baseline; gap: .6vh 1.6vw; }
@@ -236,8 +244,8 @@ body.notte #clock { opacity: .35; }
 <div id="app">
     <section id="sx">
         <div id="alto">
-            <div id="clock"><span id="time">00:00</span><span id="seconds">00</span></div>
-            <div id="date">CARICAMENTO...</div>
+            <div id="clock"><span id="ore"><span id="hh">00</span><span id="sep">:</span><span id="mm">00</span></span><span id="seconds">00</span></div>
+            <div id="date"><span id="d-g">CARICAMENTO...</span> <span id="d-m"></span> <span id="d-a"></span></div>
         </div>
         <div id="basso">
             <div id="timers"></div>
@@ -271,9 +279,13 @@ function minutiFa(iso) { return iso ? (Date.now() - new Date(iso).getTime()) / 6
 
 function aggiornaOrologio() {
     const now = new Date();
-    $('time').textContent = pad(now.getHours()) + ':' + pad(now.getMinutes());
+    $('hh').textContent = pad(now.getHours());
+    $('mm').textContent = pad(now.getMinutes());
     $('seconds').textContent = pad(now.getSeconds());
-    $('date').textContent = now.toLocaleDateString('it-IT', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).toUpperCase();
+    const dataIt = o => now.toLocaleDateString('it-IT', o).toUpperCase();
+    $('d-g').textContent = dataIt({ weekday: 'long' });
+    $('d-m').textContent = dataIt({ day: 'numeric', month: 'long' });
+    $('d-a').textContent = dataIt({ year: 'numeric' });
     document.body.classList.toggle('notte', now.getHours() >= 23 || now.getHours() < 7);
     renderTimers();
 }
@@ -385,10 +397,18 @@ function allineaColonne() {
     // Orario+meteo devono avere sempre la stessa altezza del pannello eventi, anche dopo
     // lo schermo intero (alcuni Chrome Android non ricalcolano subito il layout).
     const sx = $('sx'), dx = $('dx');
+    sx.classList.remove('impilato');
     sx.style.height = '';
     if (window.innerWidth > window.innerHeight && !document.body.classList.contains('notte')) {
         const h = Math.round(dx.getBoundingClientRect().height);
         if (h > 0) sx.style.height = h + 'px';
+        // spazio vuoto tra orologio (su una riga) e meteo: se e' tanto, l'orologio va su due righe e lo riempie
+        const vuoto = $('basso').getBoundingClientRect().top - $('alto').getBoundingClientRect().bottom;
+        if (h > 0 && vuoto > h * 0.2) {
+            sx.classList.add('impilato');
+            const fs = Math.floor(Math.min($('alto').clientHeight / 1.8, sx.clientWidth * 0.4));
+            sx.style.setProperty('--fs', fs + 'px');
+        }
     }
     if (window.innerHeight !== ULTIMA_ALTEZZA) { ULTIMA_ALTEZZA = window.innerHeight; renderEventi(); }
 }
