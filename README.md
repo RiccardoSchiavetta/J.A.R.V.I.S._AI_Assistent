@@ -15,7 +15,7 @@ Il progetto gira interamente su Termux (ambiente Linux per Android) e utilizza *
 ## ✨ Caratteristiche Principali
 
 * **🧠 Cervello AI:** Basato su **Groq Cloud**, con il modello configurabile da `config.py` (`GROQ_MODEL`) e **ricerca web integrata** per notizie, sport, prezzi e altro. Ha una **memoria breve**: ricorda gli ultimi 4 scambi (così funziona anche *"e domani?"*) e li dimentica dopo 3 minuti di inattività. Include un **fallback automatico**: in caso di errore 413 (richiesta troppo grande per il limite del piano gratuito) ritenta senza ricerca web e senza cronologia. Gli errori vengono spiegati a voce (limite di richieste raggiunto, chiave non valida, modello non più disponibile).
-* **📅 Calendario:** Legge uno o più calendari in formato iCal (il tuo Google Calendar, quello della Formula 1, qualsiasi feed `.ics`), compresi gli eventi ricorrenti, e mostra i prossimi eventi dei prossimi giorni. Puoi chiedere a voce *"che impegni ho domani?"*.
+* **📅 Calendario:** Legge uno o più calendari in formato iCal (il tuo Google Calendar, quello della Formula 1, qualsiasi feed `.ics`), compresi gli eventi ricorrenti, e mostra i prossimi eventi in ordine cronologico, fino a riempire lo spazio disponibile. Si aggiorna da solo ogni minuto: un evento nuovo compare senza riavviare nulla. Puoi chiedere a voce *"che impegni ho domani?"*.
 * **🌦️ Meteo:** Dati locali da Open-Meteo (gratis, senza chiave): temperatura, minima/massima, probabilità di pioggia e vento nelle prossime 6 ore.
 * **🔔 Annunci proattivi:** Jarvis ti avvisa a voce **15 minuti prima** di un evento del calendario e **all'inizio**. Gli annunci del calendario sono silenziosi dalle 23:00 alle 07:00.
 * **⏱️ Timer e sveglie a voce:** *"Timer di 10 minuti"*, *"Sveglia alle 7:30"*. Sono gestiti da Jarvis stesso (voce + vibrazione), non dall'app Orologio.
@@ -38,10 +38,10 @@ Le app supportate di default sono:
 > **Nota Tecnica:** Il sistema utilizza i "Package Name" (nomi pacchetto) Android per lanciare le app. I nomi preinseriti potrebbero variare in base al produttore del tuo dispositivo (Samsung, Huawei, Xiaomi, ecc.). La lista si personalizza dal file `config.py` (vedi la sezione [Configurazione](#%EF%B8%8F-configurazione-configpy)). Il lancio delle app avviene in thread separati per non bloccare il flusso principale.
 
 ### 📅 Calendario, Meteo e Annunci
-* **Aggiornamento:** calendario e meteo si aggiornano in background ogni 5 minuti, senza mai bloccare l'interfaccia. Se un calendario non risponde, Jarvis tiene gli ultimi eventi noti e segnala che i dati non sono aggiornati.
-* **Finestra temporale:** vengono mostrati gli eventi dei prossimi `GIORNI_AVANTI` giorni (di default 7).
+* **Aggiornamento:** il calendario viene riletto ogni minuto (`AGGIORNA_CALENDARIO_SEC`) e il meteo ogni 5 minuti, in background e senza mai bloccare l'interfaccia: se aggiungi un evento compare da solo. Nel pannello eventi, l'ora accanto a *AGG.* indica l'ultima lettura riuscita. Se un calendario non risponde, Jarvis tiene gli ultimi eventi noti e segnala che i dati non sono aggiornati.
+* **Finestra temporale:** Jarvis legge gli eventi dei prossimi `GIORNI_AVANTI` giorni (di default 60); il pannello li mostra in ordine cronologico finché c'è spazio.
 * **Più calendari:** puoi usarne quanti vuoi (es. il tuo e la Formula 1): gli eventi vengono uniti e ordinati per data.
-* **Domande a voce:** Jarvis conosce agenda e meteo locale e risponde senza fare ricerche sul web. Per il meteo di altre città usa invece la ricerca web.
+* **Domande a voce:** Jarvis conosce l'agenda (i prossimi 15 eventi) e il meteo locale e risponde senza fare ricerche sul web. Per il meteo di altre città usa invece la ricerca web.
 * **Annunci:** a 15 minuti dall'inizio e all'inizio dell'evento (non per gli eventi "tutto il giorno" e non dalle 23:00 alle 07:00).
 * **Timer e sveglie:** impostati a voce, compaiono anche sullo schermo. Sono gestiti da Jarvis: se riavvii lo script vengono persi e non sostituiscono una vera sveglia del mattino.
 
@@ -94,7 +94,7 @@ pkg install python pulseaudio sox ffmpeg mpv termux-api git
 Clona la repository nella cartella home di Termux.
 
 ```bash
-git clone https://github.com/RiccardoSchiavetta/J.A.R.V.I.S._AI_Assistent.git
+git clone https://github.com/TUO_UTENTE/J.A.R.V.I.S._AI_Assistent.git
 cd J.A.R.V.I.S._AI_Assistent
 ```
 
@@ -142,7 +142,9 @@ Apri Chrome sul dispositivo, vai su `http://localhost:5000` e aggiungi la pagina
 | `GROQ_MODEL` | No | `"openai/gpt-oss-120b"` | Il modello Groq usato come cervello |
 | `ICAL_URLS` | No | nessuno (calendario disattivato) | Lista di feed iCal da mostrare |
 | `ICAL_URL` | No | nessuno | Come `ICAL_URLS`, ma per un solo calendario (una stringa) |
-| `GIORNI_AVANTI` | No | `7` | Quanti giorni in avanti mostrare gli eventi |
+| `GIORNI_AVANTI` | No | `60` | Quanti giorni in avanti leggere dal calendario |
+| `AGGIORNA_CALENDARIO_SEC` | No | `60` | Ogni quanti secondi rileggere il calendario (minimo 15) |
+| `CALENDARIO_NOCACHE` | No | `True` | Chiede il feed con un parametro diverso a ogni richiesta, per evitare copie in cache (mettilo a `False` se un server rifiuta l'URL) |
 | `METEO_LAT`, `METEO_LON` | No | `41.686`, `12.778` (Velletri) | Coordinate per il meteo |
 | `LISTA_APP` | No | Spotify, Orologio, Sveglia, Calendario | App che Jarvis può aprire a voce |
 
@@ -159,7 +161,8 @@ ICAL_URLS = [
     "https://calendar.google.com/calendar/ical/.../basic.ics",   # il tuo Google Calendar
     "https://esempio.it/formula1.ics",                           # un calendario pubblico (es. Formula 1)
 ]
-GIORNI_AVANTI = 7
+GIORNI_AVANTI = 60              # giorni da leggere in avanti
+AGGIORNA_CALENDARIO_SEC = 60    # ogni quanti secondi rileggere il calendario (minimo 15)
 
 # Meteo (opzionale): coordinate della tua città
 METEO_LAT = 41.9028
@@ -254,6 +257,7 @@ Tieni le tue personalizzazioni **solo in `config.py`** (app, calendari, città, 
 | Jarvis dice *"Ho raggiunto il limite di richieste"* | Limiti del piano gratuito di Groq (richieste e token al minuto) | Aspetta un minuto e riprova |
 | Jarvis dice *"La mia chiave di accesso non risulta valida"* | `GROQ_API_KEY` errata, scaduta o revocata | Genera una nuova chiave e aggiorna `config.py` |
 | Il pannello eventi dice *"Calendario non configurato"* | Manca `ICAL_URL`/`ICAL_URLS` in `config.py` | Aggiungilo seguendo la sezione Configurazione |
+| Ho aggiunto un evento ma non compare | Google a volte serve il feed `.ics` con ritardo (anche di ore); oppure l'evento è in un calendario non presente in `ICAL_URLS` | Guarda l'ora accanto a *AGG.* nel pannello eventi: se è recente, Jarvis ha riletto il feed e il ritardo è lato Google. Verifica anche che l'evento sia nel calendario di cui hai copiato l'indirizzo |
 | Nel terminale compare `[CALENDARIO] errore: ...` | URL errato, calendario non raggiungibile o librerie mancanti | Controlla l'URL; se l'errore è `ModuleNotFoundError`, installa `icalendar`, `recurring-ical-events` e `tzdata` |
 | `git pull` rifiuta di aggiornare per modifiche locali | Hai modificato `jarvis.py` (o ci sono file `.pyc` versionati) sulla tablet | Sposta le tue impostazioni in `config.py`; poi `cp jarvis.py ~/jarvis_backup.py` e `git restore jarvis.py` prima del `git pull`. Per i `.pyc`: `git rm -r --cached __pycache__` una volta sul PC, poi commit e push |
 | `./jarvis.py: Permission denied` | Lo script non è eseguibile | Si avvia sempre con `python jarvis.py` |

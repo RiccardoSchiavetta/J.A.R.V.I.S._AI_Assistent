@@ -25,7 +25,10 @@ except (ImportError, AttributeError):
     exit()
 
 # Opzionali in config.py: se mancano, il calendario resta disattivato e il meteo usa i default
-GIORNI_AVANTI = getattr(config, "GIORNI_AVANTI", 7)  # quanti giorni in avanti mostrare
+GIORNI_AVANTI = getattr(config, "GIORNI_AVANTI", 60)  # quanti giorni in avanti leggere dal calendario
+AGGIORNA_CALENDARIO_SEC = max(15, int(getattr(config, "AGGIORNA_CALENDARIO_SEC", 60)))  # ogni quanto rileggerlo
+CALENDARIO_NOCACHE = getattr(config, "CALENDARIO_NOCACHE", True)  # chiede il feed senza copie in cache
+EVENTI_PER_IL_MODELLO = 15  # quanti eventi passare a Jarvis quando risponde a voce
 # Groq cambia spesso i modelli (compound-mini e' stato spento il 21/09/2026): tienilo in config.py
 GROQ_MODEL = getattr(config, "GROQ_MODEL", "openai/gpt-oss-120b")
 
@@ -177,16 +180,18 @@ body.parla .a2 { animation-duration: 4s; }
 
 #app {
     position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 1;
-    display: grid; grid-template-columns: 5fr 6fr; grid-template-rows: minmax(0, 1fr) auto;
+    display: grid; grid-template-columns: 5fr 6fr; grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 2.5vh 2.5vw; padding: 3vh 3vw;
 }
-#sx { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; justify-content: space-between; gap: 2vh; min-width: 0; }
-#dx { grid-column: 2; grid-row: 1; overflow: hidden; min-width: 0; display: flex; flex-direction: column; }
+#titolo { grid-column: 1 / span 2; grid-row: 1; text-align: center; font-size: min(2.8vw, 5vh); font-weight: bold; letter-spacing: .5em; padding: 0 0 1.2vh .5em; line-height: 1; border-bottom: 1px solid var(--linea); text-shadow: 0 0 16px rgba(0,229,255,.7); }
+#sx { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; justify-content: space-between; gap: 2vh; min-width: 0; }
+#dx { grid-column: 2; grid-row: 2; overflow: hidden; min-width: 0; display: flex; flex-direction: column; }
 #eventi { flex: 1; min-height: 0; overflow: hidden; }
-#barra { grid-column: 1 / span 2; grid-row: 2; }
+#barra { grid-column: 1 / span 2; grid-row: 3; }
 .pannello { border: 1px solid var(--linea); border-radius: 12px; padding: 2vh 1.6vw; background: rgba(0,0,0,.6); }
 .titolo { font-size: min(1.5vw, 2.6vh); letter-spacing: 4px; opacity: .65; margin-bottom: 1.4vh; display: flex; justify-content: space-between; }
 .titolo .agg { color: var(--warn); letter-spacing: 1px; }
+.titolo .agg.ok { color: var(--c); opacity: .7; }
 
 #clock { font-size: min(12vw, 30vh); font-weight: bold; line-height: 1; white-space: nowrap; text-shadow: 0 0 18px rgba(0,229,255,.7); }
 #seconds { font-size: .2em; opacity: .75; margin-left: .3em; text-shadow: none; }
@@ -196,7 +201,7 @@ body.parla .a2 { animation-duration: 4s; }
 #sx.impilato #ore { display: flex; flex-direction: column; }
 #sx.impilato #sep { display: none; }
 #sx.impilato #seconds { font-size: .2em; margin: 0; line-height: 1; }
-#sx.impilato #date span { display: block; }
+#sx.impilato #date span { display: block; white-space: nowrap; }
 #sx.impilato #date { font-size: min(2vw, 3.6vh); letter-spacing: 2px; line-height: 1.6; align-self: center; flex: 1; min-width: 0; }
 #date { font-size: min(2.2vw, 4vh); letter-spacing: 3px; opacity: .75; }
 
@@ -226,15 +231,15 @@ body.parla .a2 { animation-duration: 4s; }
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* Modalita' notte: solo l'orario, attenuato */
-body.notte #dx, body.notte #barra, body.notte #reactor, body.notte #meteo, body.notte #date { display: none; }
+body.notte #titolo, body.notte #dx, body.notte #barra, body.notte #reactor, body.notte #meteo, body.notte #date { display: none; }
 body.notte #app { display: flex; align-items: center; justify-content: center; }
 body.notte #sx { align-items: center; justify-content: center; }
 body.notte #clock { opacity: .35; }
 
 @media (orientation: portrait) {
-    #app { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr) auto; }
-    #sx, #dx, #barra { grid-column: 1; }
-    #sx { grid-row: 1; } #dx { grid-row: 2; } #barra { grid-row: 3; }
+    #app { grid-template-columns: 1fr; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+    #titolo, #sx, #dx, #barra { grid-column: 1; }
+    #titolo { grid-row: 1; } #sx { grid-row: 2; } #dx { grid-row: 3; } #barra { grid-row: 4; }
     #clock { font-size: min(18vw, 14vh); }
 }
 </style>
@@ -242,6 +247,7 @@ body.notte #clock { opacity: .35; }
 <body onclick="toggleFull()">
 <div id="reactor"><div class="anello a1"></div><div class="anello a2"></div></div>
 <div id="app">
+    <header id="titolo">J.A.R.V.I.S.</header>
     <section id="sx">
         <div id="alto">
             <div id="clock"><span id="ore"><span id="hh">00</span><span id="sep">:</span><span id="mm">00</span></span><span id="seconds">00</span></div>
@@ -317,7 +323,9 @@ function tra(ms) {
     if (m < 1) return 'ora';
     if (m < 60) return 'tra ' + m + ' min';
     const h = Math.floor(m / 60), mm = m % 60;
-    return 'tra ' + h + 'h' + (mm ? ' ' + pad(mm) + 'm' : '');
+    if (h < 24) return 'tra ' + h + 'h' + (mm ? ' ' + pad(mm) + 'm' : '');
+    const g = Math.floor(h / 24), hh = h % 24;
+    return 'tra ' + g + 'g' + (hh ? ' ' + hh + 'h' : '');
 }
 function etichettaGiorno(d) {
     const oggi = new Date(), dom = new Date();
@@ -328,33 +336,41 @@ function etichettaGiorno(d) {
 }
 
 function renderEventi() {
-    const box = $('eventi');
+    const box = $('eventi'), info = $('cal-agg');
     box.textContent = '';
-    $('cal-agg').textContent = '';
+    info.textContent = '';
+    info.className = 'agg';
     if (!DASH) return;
     if (DASH.cal_stato === 'non_configurato') { box.appendChild(el('div', 'vuoto', 'Calendario non configurato')); return; }
     if (DASH.cal_stato === 'caricamento') { box.appendChild(el('div', 'vuoto', 'Caricamento...')); return; }
     if (DASH.cal_stato === 'errore') {
-        $('cal-agg').textContent = DASH.cal_ts ? 'NON AGGIORNATO DA ' + Math.round(minutiFa(DASH.cal_ts)) + ' MIN' : 'ERRORE';
+        info.textContent = DASH.cal_ts ? 'NON AGGIORNATO DA ' + Math.round(minutiFa(DASH.cal_ts)) + ' MIN' : 'ERRORE';
+    } else if (DASH.cal_ts) {
+        const t = new Date(DASH.cal_ts);
+        info.className = 'agg ok';
+        info.textContent = 'AGG. ' + pad(t.getHours()) + ':' + pad(t.getMinutes());
     }
     const now = new Date();
-    const evs = (DASH.eventi || []).filter(e => new Date(e.fine) > now).slice(0, 7);
+    const evs = (DASH.eventi || []).filter(e => new Date(e.fine) > now);
     if (!evs.length) { box.appendChild(el('div', 'vuoto', 'Nessun impegno in programma')); return; }
     let ultimo = '';
-    evs.forEach(e => {
+    for (const e of evs) {
         const ini = new Date(e.inizio), fin = new Date(e.fine);
         const g = etichettaGiorno(ini < now ? now : ini);
-        if (g !== ultimo) { box.appendChild(el('div', 'giorno', g)); ultimo = g; }
+        const nuovi = [];
+        if (g !== ultimo) nuovi.push(el('div', 'giorno', g));
         const incorso = ini <= now && now < fin;
         const presto = !incorso && (ini - now) < 30 * 60000;
         const riga = el('div', 'ev' + (incorso ? ' incorso' : presto ? ' presto' : ''));
         riga.appendChild(el('span', 'ev-ora' + (e.tutto_giorno ? ' tg' : ''), e.tutto_giorno ? 'GIORNATA' : pad(ini.getHours()) + ':' + pad(ini.getMinutes())));
         riga.appendChild(el('span', 'ev-tit', e.titolo));
         riga.appendChild(el('span', 'ev-tra', e.tutto_giorno ? '' : (incorso ? 'IN CORSO' : tra(ini - now))));
-        box.appendChild(riga);
-    });
-    while (box.scrollHeight > box.clientHeight + 1 && box.lastChild) box.removeChild(box.lastChild);
-    while (box.lastChild && box.lastChild.classList.contains('giorno')) box.removeChild(box.lastChild);
+        nuovi.push(riga);
+        nuovi.forEach(n => box.appendChild(n));
+        // si aggiungono eventi finche' c'e' spazio: il primo che non entra viene tolto e si ferma l'elenco
+        if (box.scrollHeight > box.clientHeight + 1) { nuovi.forEach(n => box.removeChild(n)); break; }
+        ultimo = g;
+    }
 }
 
 function renderMeteo() {
@@ -399,6 +415,7 @@ function allineaColonne() {
     const sx = $('sx'), dx = $('dx');
     sx.classList.remove('impilato');
     sx.style.height = '';
+    $('date').style.fontSize = '';
     if (window.innerWidth > window.innerHeight && !document.body.classList.contains('notte')) {
         const h = Math.round(dx.getBoundingClientRect().height);
         if (h > 0) sx.style.height = h + 'px';
@@ -408,6 +425,10 @@ function allineaColonne() {
             sx.classList.add('impilato');
             const fs = Math.floor(Math.min($('alto').clientHeight / 1.8, sx.clientWidth * 0.4));
             sx.style.setProperty('--fs', fs + 'px');
+            // la data si rimpicciolisce finche' "11 NOVEMBRE" sta su una riga sola
+            const dt = $('date');
+            let f = parseFloat(getComputedStyle(dt).fontSize);
+            while (dt.scrollWidth > dt.clientWidth + 1 && f > 14) { f -= 1; dt.style.fontSize = f + 'px'; }
         }
     }
     if (window.innerHeight !== ULTIMA_ALTEZZA) { ULTIMA_ALTEZZA = window.innerHeight; renderEventi(); }
@@ -480,7 +501,12 @@ FEED = {}  # indice del feed -> {"eventi": [...], "ts": datetime dell'ultimo sca
 def scarica_feed(url):
     import icalendar
     import recurring_ical_events
-    r = requests.get(url, timeout=20)
+    kw = {"timeout": 20}
+    if CALENDARIO_NOCACHE:
+        # Google puo' servire il feed .ics con ritardo: un parametro diverso a ogni richiesta evita le copie in cache
+        kw["params"] = {"_": int(time.time())}
+        kw["headers"] = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
+    r = requests.get(url, **kw)
     r.raise_for_status()
     cal = icalendar.Calendar.from_ical(r.content)
     ora = adesso()
@@ -529,7 +555,7 @@ def aggiorna_calendario():
                 print("[CALENDARIO] installa: pip install icalendar recurring-ical-events tzdata")
     ora = adesso()
     eventi = sorted((ev for f in FEED.values() for ev in f["eventi"] if ev["fine"] > ora),
-                    key=lambda e: e["inizio"])[:20]
+                    key=lambda e: e["inizio"])[:60]
     completo = len(FEED) == len(ICAL_URLS)
     ts = min((f["ts"] for f in FEED.values()), default=None) if completo else None
     with LOCK_CACHE:
@@ -588,11 +614,24 @@ def aggiorna_meteo():
         print(f"[METEO] errore: {type(e).__name__}")
 
 
+INTERVALLO_METEO = 300
+
+
 def thread_dati():
+    """Rilegge calendario (ogni AGGIORNA_CALENDARIO_SEC) e meteo (ogni 5 minuti), senza mai fermarsi."""
+    ultimo_cal = ultimo_meteo = 0.0
     while True:
-        aggiorna_calendario()
-        aggiorna_meteo()
-        time.sleep(300)
+        try:
+            ora = time.time()
+            if ora - ultimo_cal >= AGGIORNA_CALENDARIO_SEC:
+                ultimo_cal = ora
+                aggiorna_calendario()
+            if ora - ultimo_meteo >= INTERVALLO_METEO:
+                ultimo_meteo = ora
+                aggiorna_meteo()
+        except Exception as e:
+            print(f"[DATI] errore: {type(e).__name__}")
+        time.sleep(5)
 
 
 def _giorno_relativo(dt):
@@ -603,7 +642,9 @@ def _giorno_relativo(dt):
         return "domani"
     if delta == 2:
         return "dopodomani"
-    return GIORNI_IT[dt.weekday()]
+    if delta < 7:
+        return GIORNI_IT[dt.weekday()]
+    return f"{dt.day} {MESI_IT[dt.month - 1]}"
 
 
 def riepilogo_contesto():
@@ -620,7 +661,7 @@ def riepilogo_contesto():
     else:
         ora = adesso()
         voci = []
-        for e in eventi[:8]:
+        for e in eventi[:EVENTI_PER_IL_MODELLO]:
             if e["fine"] <= ora:
                 continue
             titolo = e["titolo"][:60]
@@ -628,8 +669,10 @@ def riepilogo_contesto():
                 voci.append(f"{_giorno_relativo(max(e['inizio'], ora))} tutto il giorno: {titolo}")
             else:
                 voci.append(f"{_giorno_relativo(e['inizio'])} {e['inizio']:%H:%M}: {titolo}")
+        if len(eventi) > EVENTI_PER_IL_MODELLO:
+            voci.append("altri eventi più avanti")
         nota = " (dati non aggiornati)" if stato == "errore" else ""
-        righe.append(f"[CALENDARIO prossimi {GIORNI_AVANTI} giorni" + nota + ": " + ("; ".join(voci) if voci else "nessun impegno") + "]")
+        righe.append(f"[CALENDARIO prossimi eventi in ordine, fino a {GIORNI_AVANTI} giorni" + nota + ": " + ("; ".join(voci) if voci else "nessun impegno") + "]")
     if meteo:
         parti = [f"{meteo['temp']} gradi", meteo["desc"], f"minima {meteo['min']}", f"massima {meteo['max']}"]
         if meteo["pioggia"] is not None:
