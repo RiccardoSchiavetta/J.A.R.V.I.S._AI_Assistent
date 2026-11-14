@@ -13,8 +13,13 @@ import re
 import queue
 from collections import deque
 from datetime import datetime, timedelta, time as dtime
-from flask import Flask, jsonify, Response
+from flask import Flask, jsonify, Response, request
 from gtts import gTTS
+
+import comandi
+import musica
+import promemoria
+import riposo
 
 try:
     import config
@@ -29,6 +34,23 @@ GIORNI_AVANTI = getattr(config, "GIORNI_AVANTI", 60)  # quanti giorni in avanti 
 AGGIORNA_CALENDARIO_SEC = max(15, int(getattr(config, "AGGIORNA_CALENDARIO_SEC", 60)))  # ogni quanto rileggerlo
 CALENDARIO_NOCACHE = getattr(config, "CALENDARIO_NOCACHE", True)  # chiede il feed senza copie in cache
 EVENTI_PER_IL_MODELLO = 15  # quanti eventi passare a Jarvis quando risponde a voce
+
+# Musica, timer e sveglie (tutto opzionale in config.py)
+DATI_DIR = os.path.expanduser(getattr(config, "DATI_DIR", "~/.jarvis"))  # qui si salvano timer e sveglie
+RADIO_PRESET = getattr(config, "RADIO", {})                      # {"deejay": "https://..."}: radio preferite con il loro link
+RADIO_PREFERITA = getattr(config, "RADIO_PREFERITA", "")         # per "metti un po' di musica" e per le sveglie con la musica
+MUSICA_CARTELLE = getattr(config, "MUSICA_CARTELLE", ["~/storage/music"])  # file audio della tablet
+MUSICA_YOUTUBE = getattr(config, "MUSICA_YOUTUBE", True)         # "metti i Queen" cerca su YouTube (serve yt-dlp)
+ADB_DISPOSITIVO = getattr(config, "ADB_DISPOSITIVO", None)       # es. "localhost:5555": tasti multimediali per Amazon Music & co.
+VOLUME_MUSICA = int(getattr(config, "VOLUME_MUSICA", 60))        # volume iniziale del lettore (0-100)
+DUCKING = float(getattr(config, "DUCKING", 0.25))                # a che frazione scende la musica mentre Jarvis ascolta
+SVEGLIA_MAX_SEC = int(getattr(config, "SVEGLIA_MAX_SEC", 300))   # dopo quanto una sveglia smette da sola di suonare
+SNOOZE_MIN = int(getattr(config, "SNOOZE_MIN", 10))              # minuti di "rimanda"
+
+# Riposo: la "notte" automatica (di default 00:00-08:00) e il riposo manuale ("Jarvis, sto uscendo")
+NOTTE_INIZIO = int(getattr(config, "NOTTE_INIZIO", 0))
+NOTTE_FINE = int(getattr(config, "NOTTE_FINE", 8))
+LINGUE_RIPOSO = ("it-IT", "en-US")   # da riposo si ascolta anche in inglese: "wake up, daddy's home"
 # Groq cambia spesso i modelli (compound-mini e' stato spento il 21/09/2026): tienilo in config.py
 GROQ_MODEL = getattr(config, "GROQ_MODEL", "openai/gpt-oss-120b")
 
@@ -124,10 +146,15 @@ PACCHETTI_CONSENTITI = set(LISTA_APP.values())
 CACHE = {"eventi": [], "cal_stato": "caricamento", "cal_ts": None, "meteo": None, "meteo_ts": None}
 LOCK_CACHE = threading.Lock()
 
-# Timer e sveglie impostati a voce, e coda degli annunci da leggere
-PROMEMORIA = []
-LOCK_PROMEMORIA = threading.Lock()
+# Coda degli annunci da leggere, timer/sveglie persistenti, lettore musicale, suoneria
 ANNUNCI = queue.Queue()
+PROM = promemoria.Promemoria(os.path.join(DATI_DIR, "promemoria.json"), adesso)
+LETTORE = musica.Lettore(volume_iniziale=VOLUME_MUSICA)
+SUONERIA = musica.Suoneria()
+FILE_SUONERIA = os.path.join(DATI_DIR, "suoneria.wav")
+SQUILLO = {"voce": None, "inizio": 0.0, "radio": False}  # sveglia o timer che sta suonando adesso
+PARLA_ORA = threading.Event()                              # "tocca per parlare" dallo schermo
+RIPOSO = riposo.Riposo(os.path.join(DATI_DIR, "riposo.json"), adesso, NOTTE_INIZIO, NOTTE_FINE)
 
 # Server web
 app = Flask(__name__)
@@ -211,7 +238,8 @@ body.parla .a2 { animation-duration: 4s; }
 .m-desc { font-size: min(2.6vw, 4.6vh); color: #fff; text-transform: uppercase; }
 .m-det { width: 100%; font-size: min(2vw, 3.5vh); opacity: .9; display: flex; flex-wrap: wrap; gap: .4vh 1.6vw; }
 .warn { color: var(--warn); }
-#timers { font-size: min(2.4vw, 4.4vh); color: var(--warn); }
+#basso { display: flex; flex-direction: column; gap: 1.2vh; }
+#timers { font-size: min(1.9vw, 3.4vh); color: var(--warn); }
 #timers div { margin-top: .6vh; }
 
 .giorno { font-size: min(1.5vw, 2.6vh); letter-spacing: 4px; opacity: .6; margin: 1.6vh 0 .6vh; }
@@ -230,11 +258,20 @@ body.parla .a2 { animation-duration: 4s; }
 #message { font-size: min(1.8vw, 3.2vh); margin-top: .6vh; color: #fff; font-style: italic; min-height: 1.3em;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
+#timers .musica { color: var(--c); opacity: .85; font-size: .7em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#barra { cursor: pointer; }
+#squillo { display: none; position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 50; background: rgba(0,0,0,.88);
+    flex-direction: column; align-items: center; justify-content: center; gap: 5vh; text-align: center; }
+#sq-titolo { font-size: min(7vw, 13vh); font-weight: bold; color: var(--warn); text-shadow: 0 0 24px rgba(255,214,51,.6); animation: pulse 1s infinite; }
+#squillo button { font-family: inherit; font-size: min(3vw, 6vh); font-weight: bold; letter-spacing: 3px; color: #000; background: var(--c);
+    border: 0; border-radius: 14px; padding: 2.4vh 4vw; margin: 0 1.5vw; }
+#squillo button.sec { background: transparent; color: var(--c); border: 2px solid var(--c); }
 /* Modalita' notte: solo l'orario, attenuato */
 body.notte #titolo, body.notte #dx, body.notte #barra, body.notte #reactor, body.notte #meteo, body.notte #date { display: none; }
 body.notte #app { display: flex; align-items: center; justify-content: center; }
 body.notte #sx { align-items: center; justify-content: center; }
 body.notte #clock { opacity: .35; }
+#riposo-label { display: none; text-align: center; font-size: min(2vw, 3.6vh); letter-spacing: .6em; padding-left: .6em; opacity: .35; margin-top: 1vh; }
 
 @media (orientation: portrait) {
     #app { grid-template-columns: 1fr; grid-template-rows: auto auto minmax(0, 1fr) auto; }
@@ -244,7 +281,7 @@ body.notte #clock { opacity: .35; }
 }
 </style>
 </head>
-<body onclick="toggleFull()">
+<body onclick="toccoSchermo()">
 <div id="reactor"><div class="anello a1"></div><div class="anello a2"></div></div>
 <div id="app">
     <header id="titolo">J.A.R.V.I.S.</header>
@@ -252,6 +289,7 @@ body.notte #clock { opacity: .35; }
         <div id="alto">
             <div id="clock"><span id="ore"><span id="hh">00</span><span id="sep">:</span><span id="mm">00</span></span><span id="seconds">00</span></div>
             <div id="date"><span id="d-g">CARICAMENTO...</span> <span id="d-m"></span> <span id="d-a"></span></div>
+            <div id="riposo-label">RIPOSO</div>
         </div>
         <div id="basso">
             <div id="timers"></div>
@@ -262,10 +300,14 @@ body.notte #clock { opacity: .35; }
         <div class="titolo"><span>PROSSIMI EVENTI</span><span id="cal-agg" class="agg"></span></div>
         <div id="eventi"></div>
     </section>
-    <footer id="barra">
+    <footer id="barra" onclick="event.stopPropagation(); parlaOra()">
         <div id="status">OFFLINE</div>
         <div id="message">...</div>
     </footer>
+</div>
+<div id="squillo" onclick="event.stopPropagation()">
+    <div id="sq-titolo"></div>
+    <div><button onclick="inviaAzione('stop')">FERMA</button><button class="sec" onclick="inviaAzione('snooze')">RIMANDA</button></div>
 </div>
 <script>
 const $ = id => document.getElementById(id);
@@ -276,6 +318,16 @@ function el(tag, cls, testo) {
     if (cls) e.className = cls;
     if (testo !== undefined) e.textContent = testo;
     return e;
+}
+function toccoSchermo() {
+    if (document.body.classList.contains('notte')) fetch('/risveglia', { method: 'POST' }).catch(() => {});
+    toggleFull();
+}
+function renderRiposo(stato) {
+    const era = document.body.classList.contains('notte');
+    document.body.classList.toggle('notte', !!stato);
+    $('riposo-label').style.display = stato === 'manuale' ? 'block' : 'none';
+    if (era !== !!stato) allineaColonne();
 }
 function toggleFull() {
     if (!document.fullscreenElement) { document.documentElement.requestFullscreen().catch(e => console.log(e)); }
@@ -292,7 +344,6 @@ function aggiornaOrologio() {
     $('d-g').textContent = dataIt({ weekday: 'long' });
     $('d-m').textContent = dataIt({ day: 'numeric', month: 'long' });
     $('d-a').textContent = dataIt({ year: 'numeric' });
-    document.body.classList.toggle('notte', now.getHours() >= 23 || now.getHours() < 7);
     renderTimers();
 }
 
@@ -300,6 +351,8 @@ function aggiornaStato() {
     fetch('/data').then(r => r.json()).then(data => {
         $('status').textContent = data.stato;
         $('message').textContent = data.testo;
+        renderSquillo(data.squillo);
+        renderRiposo(data.riposo);
         const s = $('status');
         if (data.stato.includes('PARLANDO')) s.style.color = '#ff3333';
         else if (data.stato.includes('ELABORAZIONE')) s.style.color = '#ffff33';
@@ -313,6 +366,16 @@ function aggiornaStato() {
         $('message').textContent = 'Server non raggiungibile';
     });
 }
+
+function renderSquillo(sq) {
+    $('squillo').style.display = sq ? 'flex' : 'none';
+    if (sq) $('sq-titolo').textContent = sq.testo;
+}
+function inviaAzione(azione) {
+    fetch('/azione', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ azione: azione }) })
+        .then(() => aggiornaStato()).catch(() => {});
+}
+function parlaOra() { fetch('/parla', { method: 'POST' }).catch(() => {}); }
 
 function aggiornaDash() {
     fetch('/dash').then(r => r.json()).then(d => { DASH = d; renderMeteo(); renderEventi(); renderTimers(); }).catch(() => {});
@@ -394,18 +457,18 @@ function renderTimers() {
     box.textContent = '';
     if (!DASH) return;
     const now = Date.now();
-    (DASH.promemoria || []).forEach(p => {
-        const rest = Math.round((new Date(p.quando).getTime() - now) / 1000);
-        if (rest <= 0) return;
-        let testo;
-        if (p.tipo === 'sveglia') {
-            const q = new Date(p.quando);
-            testo = 'SVEGLIA ' + pad(q.getHours()) + ':' + pad(q.getMinutes());
-        } else {
-            testo = 'TIMER ' + pad(Math.floor(rest / 60)) + ':' + pad(rest % 60);
-        }
-        box.appendChild(el('div', '', testo));
+    const voci = (DASH.promemoria || []).map(p => ({ p: p, rest: Math.round((new Date(p.quando).getTime() - now) / 1000) })).filter(x => x.rest > 0);
+    voci.filter(x => x.p.tipo === 'timer').slice(0, 3).forEach(x => {
+        const r = x.rest, s = r % 60, m = Math.floor(r % 3600 / 60), h = Math.floor(r / 3600);
+        const t = (h ? h + ':' + pad(m) : pad(m)) + ':' + pad(s);
+        box.appendChild(el('div', '', 'TIMER ' + (x.p.nome ? x.p.nome.toUpperCase() + ' ' : '') + t));
     });
+    voci.filter(x => x.p.tipo === 'sveglia').slice(0, 2).forEach(x => {
+        const q = new Date(x.p.quando);
+        box.appendChild(el('div', '', 'SVEGLIA ' + pad(q.getHours()) + ':' + pad(q.getMinutes())));
+    });
+    const mu = DASH.musica;
+    if (mu && mu.attiva) box.appendChild(el('div', 'musica', (mu.pausa ? 'IN PAUSA ' : 'MUSICA ') + (mu.titolo || '')));
 }
 
 let ULTIMA_ALTEZZA = 0;
@@ -416,11 +479,18 @@ function allineaColonne() {
     sx.classList.remove('impilato');
     sx.style.height = '';
     $('date').style.fontSize = '';
+    $('clock').style.fontSize = '';
     if (window.innerWidth > window.innerHeight && !document.body.classList.contains('notte')) {
         const h = Math.round(dx.getBoundingClientRect().height);
         if (h > 0) sx.style.height = h + 'px';
         // spazio vuoto tra orologio (su una riga) e meteo: se e' tanto, l'orologio va su due righe e lo riempie
         const vuoto = $('basso').getBoundingClientRect().top - $('alto').getBoundingClientRect().bottom;
+        if (vuoto < 0 || sx.scrollHeight > sx.clientHeight + 1) {
+            // timer, sveglie e musica occupano molto: l'orologio si rimpicciolisce quanto serve
+            const ck = $('clock');
+            let f = parseFloat(getComputedStyle(ck).fontSize);
+            while (sx.scrollHeight > sx.clientHeight && f > 40) { f = Math.floor(f * 0.94); ck.style.fontSize = f + 'px'; }
+        }
         if (h > 0 && vuoto > h * 0.2) {
             sx.classList.add('impilato');
             const fs = Math.floor(Math.min($('alto').clientHeight / 1.8, sx.clientWidth * 0.4));
@@ -456,7 +526,33 @@ def index():
 
 @app.route('/data')
 def get_data():
-    return jsonify({'stato': HUD_STATO, 'testo': HUD_TESTO})
+    voce = SQUILLO["voce"]
+    return jsonify({'stato': HUD_STATO, 'testo': HUD_TESTO, 'riposo': RIPOSO.stato(),
+                    'squillo': {'testo': testo_squillo(voce)} if voce else None})
+
+
+@app.route('/risveglia', methods=['POST'])
+def risveglia_web():
+    """Tocco sullo schermo in riposo: torna sveglio (in silenzio)."""
+    return jsonify({"ok": RIPOSO.esci() is not None})
+
+
+@app.route('/azione', methods=['POST'])
+def azione_web():
+    """Pulsanti a schermo per la sveglia che suona."""
+    a = (request.get_json(silent=True) or {}).get("azione")
+    if a == "stop":
+        return jsonify({"ok": ferma_squillo()})
+    if a == "snooze":
+        return jsonify({"ok": rimanda_squillo(SNOOZE_MIN)})
+    return jsonify({"ok": False}), 400
+
+
+@app.route('/parla', methods=['POST'])
+def parla_web():
+    """Tocco sulla barra di stato: Jarvis ascolta subito, senza wake word (utile con la musica alta)."""
+    PARLA_ORA.set()
+    return jsonify({"ok": True})
 
 
 @app.route('/dash')
@@ -467,8 +563,11 @@ def get_dash():
                "meteo": CACHE["meteo"], "meteo_ts": CACHE["meteo_ts"]}
     out["eventi"] = [{"titolo": e["titolo"], "luogo": e["luogo"], "tutto_giorno": e["tutto_giorno"],
                       "inizio": e["inizio"].isoformat(), "fine": e["fine"].isoformat()} for e in eventi]
-    with LOCK_PROMEMORIA:
-        out["promemoria"] = [{"tipo": p["tipo"], "quando": p["quando"].isoformat()} for p in PROMEMORIA]
+    out["promemoria"] = PROM.pubblico()
+    try:
+        out["musica"] = LETTORE.stato()
+    except Exception:
+        out["musica"] = {"attiva": False, "pausa": False, "titolo": None}
     return jsonify(out)
 
 
@@ -688,24 +787,16 @@ def riepilogo_contesto():
 # ---------------------------------------------------------------------------
 
 def ora_silenziosa(ora):
-    return ora.hour >= 23 or ora.hour < 7
+    """Niente annunci del calendario mentre Jarvis e' in riposo (notte o riposo manuale)."""
+    return RIPOSO.stato(ora) is not None
 
 
-def imposta_timer(secondi):
-    secondi = max(1, min(int(secondi), 24 * 3600))
-    with LOCK_PROMEMORIA:
-        PROMEMORIA.append({"tipo": "timer", "quando": adesso() + timedelta(seconds=secondi),
-                           "testo": "Signore, il timer è scaduto."})
+def imposta_timer(secondi, nome=None):
+    return PROM.aggiungi_timer(secondi, nome)
 
 
 def imposta_sveglia(ore, minuti):
-    ora = adesso()
-    quando = ora.replace(hour=ore, minute=minuti, second=0, microsecond=0)
-    if quando <= ora:
-        quando += timedelta(days=1)
-    with LOCK_PROMEMORIA:
-        PROMEMORIA.append({"tipo": "sveglia", "quando": quando,
-                           "testo": f"Signore, sono le {ore:02d}:{minuti:02d}. È l'ora della sveglia."})
+    return PROM.aggiungi_sveglia(ore, minuti)
 
 
 def vibra(ms=500):
@@ -716,18 +807,65 @@ def vibra(ms=500):
         pass
 
 
+def testo_squillo(voce):
+    if voce["tipo"] == "timer":
+        return "TIMER " + (voce["nome"].upper() + " " if voce.get("nome") else "") + "SCADUTO"
+    q = datetime.fromisoformat(voce["quando"])
+    return f"SVEGLIA {q:%H:%M}" + (" - " + voce["nome"].upper() if voce.get("nome") else "")
+
+
+def avvia_squillo(voce):
+    """Sveglia o timer scaduto: suona (bip oppure la radio scelta) finche' non lo fermi."""
+    ferma_squillo()
+    SQUILLO.update(voce=voce, inizio=time.time(), radio=False)
+    azione = voce.get("azione") or {}
+    if "radio" in azione:
+        SQUILLO["radio"] = bool(riproduci_radio(azione["radio"]))
+    if not SQUILLO["radio"]:
+        try:
+            if LETTORE.attivo():
+                LETTORE.pausa()  # la musica in corso lascia il posto alla sveglia
+        except Exception:
+            pass
+        if not os.path.exists(FILE_SUONERIA):
+            musica.crea_suoneria(FILE_SUONERIA)
+        SUONERIA.avvia(FILE_SUONERIA)
+    vibra(800)
+    print(f"[SQUILLO] {testo_squillo(voce)}")
+
+
+def ferma_squillo():
+    voce = SQUILLO["voce"]
+    if not voce:
+        return False
+    SUONERIA.ferma()
+    if SQUILLO["radio"]:
+        LETTORE.stop()
+    SQUILLO.update(voce=None, radio=False)
+    return True
+
+
+def rimanda_squillo(minuti):
+    voce = SQUILLO["voce"]
+    if not voce:
+        return False
+    ferma_squillo()
+    if voce["tipo"] == "timer":
+        PROM.aggiungi_timer(minuti * 60, voce.get("nome"))
+    else:
+        PROM.rimanda(voce, minuti)
+    return True
+
+
 def controlla_promemoria(annunciati):
-    """Accoda gli annunci dovuti: timer/sveglie scaduti e eventi del calendario in arrivo."""
+    """Fa suonare timer/sveglie scaduti e accoda gli annunci degli eventi del calendario in arrivo."""
     ora = adesso()
-    scaduti = []
-    with LOCK_PROMEMORIA:
-        for p in PROMEMORIA[:]:
-            if p["quando"] <= ora:
-                PROMEMORIA.remove(p)
-                scaduti.append(p)
-    for p in scaduti:
-        ANNUNCI.put(p["testo"])
-        vibra()
+    for voce in PROM.scattati():
+        avvia_squillo(voce)
+    if SQUILLO["voce"]:
+        massimo = SVEGLIA_MAX_SEC if SQUILLO["voce"]["tipo"] == "sveglia" else min(120, SVEGLIA_MAX_SEC)
+        if time.time() - SQUILLO["inizio"] > massimo:
+            ferma_squillo()
 
     if ora_silenziosa(ora):
         return
@@ -756,7 +894,7 @@ def thread_promemoria():
             controlla_promemoria(annunciati)
         except Exception as e:
             print(f"[PROMEMORIA] errore: {type(e).__name__}")
-        time.sleep(20)
+        time.sleep(2)
 
 
 def svuota_annunci():
@@ -838,7 +976,24 @@ def soglia_corrente():
     return min(6000, max(SOGLIA_RUMORE, min(RMS_RECENTI) * 2.5))
 
 
-def ascolta_dinamico(nome_file="mic_monitor.wav"):
+def trascrivi(nome_file, lingue=("it-IT",)):
+    """Testo sentito nel file: una trascrizione per lingua, unite da " ; "."""
+    recognizer = sr.Recognizer()
+    try:
+        with sr.AudioFile(nome_file) as source:
+            audio_data = recognizer.record(source)
+    except Exception:
+        return ""
+    testi = []
+    for lingua in lingue:
+        try:
+            testi.append(recognizer.recognize_google(audio_data, language=lingua).lower())
+        except Exception:
+            pass
+    return " ; ".join(testi)
+
+
+def ascolta_dinamico(nome_file="mic_monitor.wav", lingue=("it-IT",)):
     global HUD_STATO
 
     if os.path.exists(nome_file):
@@ -894,6 +1049,8 @@ def ascolta_dinamico(nome_file="mic_monitor.wav"):
                 break
             if not ha_parlato and durata_totale > 5:
                 break
+            if PARLA_ORA.is_set() and not ha_parlato:
+                break  # tocco sullo schermo: si esce subito e si ascolta il comando
 
     except Exception as e:
         print(e)
@@ -913,14 +1070,7 @@ def ascolta_dinamico(nome_file="mic_monitor.wav"):
         wf.setframerate(RATE)
         wf.writeframes(b''.join(frames))
 
-    recognizer = sr.Recognizer()
-    try:
-        with sr.AudioFile(nome_file) as source:
-            audio_data = recognizer.record(source)
-            testo = recognizer.recognize_google(audio_data, language="it-IT")
-            return testo.lower()
-    except Exception:
-        return ""
+    return trascrivi(nome_file, lingue)
 
 
 # ---------------------------------------------------------------------------
@@ -1045,9 +1195,303 @@ def gestisci_risposta_e_comandi(risposta_completa):
     parla(RE_TAG.sub("", risposta_completa).strip())
 
 
+def _quando_parlato(q):
+    delta = (q.date() - adesso().date()).days
+    if delta == 0:
+        return "oggi"
+    if delta == 1:
+        return "domani"
+    if delta == 2:
+        return "dopodomani"
+    return f"{GIORNI_IT[q.weekday()]} {q.day} {MESI_IT[q.month - 1]}"
+
+
+def risolvi_radio(nome):
+    """(titolo, url): prima le radio di config.py (RADIO), poi la ricerca su radio-browser.info."""
+    n = (nome or RADIO_PREFERITA or "").strip().lower()
+    if not n:
+        return None
+    for chiave, url in RADIO_PRESET.items():
+        if chiave.lower() in n or n in chiave.lower():
+            return chiave, url
+    ris = musica.cerca_radio(n)
+    return ris[0] if ris else None
+
+
+def riproduci_radio(nome):
+    r = risolvi_radio(nome)
+    return bool(r and LETTORE.riproduci(r[1], titolo=r[0]))
+
+
+def _musica_attiva():
+    try:
+        return LETTORE.attivo()
+    except Exception:
+        return False
+
+
+def esegui_intent(i):
+    """Esegue un comando riconosciuto da comandi.interpreta().
+
+    Restituisce None se non sa gestirlo (si passa al modello), "" se e' fatto in silenzio
+    (es. pausa: la musica che cambia e' gia' la risposta), altrimenti la frase da dire."""
+    t = i["tipo"]
+    adesso_ = adesso()
+
+    if t == "ora":
+        h, m = adesso_.hour, adesso_.minute
+        if (h, m) == (0, 0):
+            return "È mezzanotte, Signore."
+        if h == 1:
+            return "È l'una" + (f" e {m}" if m else "") + ", Signore."
+        return f"Sono le {h}" + (f" e {m}" if m else "") + ", Signore."
+    if t == "data":
+        return f"Oggi è {GIORNI_IT[adesso_.weekday()]} {adesso_.day} {MESI_IT[adesso_.month - 1]} {adesso_.year}, Signore."
+
+    # --- timer ---
+    if t == "timer":
+        v = PROM.aggiungi_timer(i["secondi"], i.get("nome"))
+        nome = f" {v['nome']}" if v.get("nome") else ""
+        return f"Timer{nome} di {comandi.durata_parlata(v['durata'])} impostato."
+    if t == "timer_quanto":
+        timer = PROM.quanto_manca()
+        if not timer:
+            return "Non ci sono timer attivi, Signore."
+        parti = [(f"{v['nome']}: " if v.get("nome") else "") + comandi.durata_parlata(sec) for v, sec in timer]
+        if len(timer) == 1:
+            v = timer[0][0]
+            return f"Al timer{' ' + v['nome'] if v.get('nome') else ''} mancano {comandi.durata_parlata(timer[0][1])}."
+        return "Timer attivi. " + ". ".join(parti) + "."
+    if t == "timer_cancella":
+        timer = PROM.elenco("timer")
+        if not timer:
+            return "Non ci sono timer da cancellare, Signore."
+        if i.get("nome"):
+            n = PROM.cancella(tipo="timer", nome=i["nome"])
+            return "Timer cancellato." if n else f"Non trovo un timer {i['nome']}, Signore."
+        if i.get("tutti") or len(timer) == 1:
+            n = PROM.cancella(tipo="timer", tutti=True)
+            return "Timer cancellato." if n == 1 else "Timer cancellati."
+        return "Ho più timer attivi, Signore: dica quale, oppure cancelli tutti i timer."
+
+    # --- sveglie ---
+    if t == "sveglia":
+        azione = {"radio": i["radio"]} if i.get("radio") is not None else None
+        if i.get("giorni"):
+            ore = comandi.ore_ricorrente(i["ore"], i["qual"])
+            PROM.aggiungi_sveglia(ore, i["minuti"], giorni=i["giorni"], azione=azione)
+            return f"Sveglia impostata per {comandi.orario_parlato(ore, i['minuti'])}, {comandi.giorni_parlati(i['giorni'])}."
+        quando = comandi.istante_sveglia(i["ore"], i["minuti"], i["qual"], adesso_, data=i.get("data"), weekday=i.get("weekday"))
+        PROM.aggiungi_sveglia(quando.hour, quando.minute, None, azione, quando=quando)
+        return f"Sveglia impostata per {comandi.orario_parlato(quando.hour, quando.minute)}, {_quando_parlato(quando)}."
+    if t == "sveglia_tra":
+        azione = {"radio": i["radio"]} if i.get("radio") is not None else None
+        PROM.aggiungi_sveglia_tra(i["secondi"], azione)
+        return f"Sveglia impostata tra {comandi.durata_parlata(i['secondi'])}."
+    if t == "sveglie_elenco":
+        voci = PROM.elenco("sveglia")
+        if not voci:
+            return "Non ci sono sveglie attive, Signore."
+        parti = []
+        for v in voci:
+            q = datetime.fromisoformat(v["quando"])
+            quando = comandi.giorni_parlati(v["giorni"]) if v.get("giorni") else _quando_parlato(q)
+            parti.append(f"{comandi.orario_parlato(q.hour, q.minute)}, {quando}")
+        return ("Una sveglia: " if len(parti) == 1 else f"{len(parti)} sveglie: ") + ". ".join(parti) + "."
+    if t == "sveglia_cancella":
+        voci = PROM.elenco("sveglia")
+        if not voci:
+            return "Non ci sono sveglie da cancellare, Signore."
+        if i.get("ore") is not None:
+            n = PROM.cancella(tipo="sveglia", ore=i["ore"], minuti=i["minuti"], qual=i.get("qual"))
+            return "Sveglia cancellata." if n else "Non trovo una sveglia a quell'ora, Signore."
+        if i.get("tutte") or len(voci) == 1:
+            n = PROM.cancella(tipo="sveglia", tutti=True)
+            return "Sveglia cancellata." if n == 1 else "Sveglie cancellate."
+        return "Ho più sveglie attive, Signore: dica a che ora, oppure cancelli tutte le sveglie."
+
+    # --- riposo ---
+    if t == "riposo_entra":
+        RIPOSO.entra()
+        if _musica_attiva():
+            LETTORE.stop()
+        return "A più tardi, Signore. Entro in modalità riposo."
+    if t == "riposo_esci":
+        if RIPOSO.stato() is None:
+            return "Sono già sveglio, Signore."
+        RIPOSO.esci()
+        return benvenuto()
+
+    # --- stop / rimanda ---
+    if t == "stop":
+        if ferma_squillo():
+            return ""
+        if _musica_attiva():
+            LETTORE.stop()
+        return ""
+    if t == "snooze":
+        minuti = i.get("minuti") or SNOOZE_MIN
+        if rimanda_squillo(minuti):
+            return f"Rimando di {minuti} minuti."
+        return "Non c'è nessuna sveglia che suona, Signore."
+
+    # --- controllo della musica ---
+    if t in ("musica_pausa", "musica_riprendi", "musica_prossima", "musica_precedente", "musica_stop"):
+        nome = t[len("musica_"):]
+        if _musica_attiva():
+            ok = {"pausa": LETTORE.pausa, "riprendi": LETTORE.riprendi, "prossima": LETTORE.prossima,
+                  "precedente": LETTORE.precedente, "stop": LETTORE.stop}[nome]()
+            if not ok and nome in ("prossima", "precedente"):
+                return "Non c'è un altro brano in lista, Signore."
+            return ""
+        if musica.tasto_sistema(nome, ADB_DISPOSITIVO):  # per esempio Amazon Music
+            return ""
+        return "" if nome == "stop" else None  # senza musica, "continua"/"avanti" restano frasi normali
+    if t in ("volume_delta", "volume_imposta"):
+        if _musica_attiva():
+            if t == "volume_delta":
+                LETTORE.volume_delta(i["delta"])
+            else:
+                LETTORE.imposta_volume(i["valore"])
+            return ""
+        livello = musica.volume_sistema(delta=i.get("delta"), valore=i.get("valore"))
+        return "" if livello is not None else None
+    if t == "musica_cosa":
+        st = LETTORE.stato()
+        if st["attiva"] and st["titolo"]:
+            return f"Sta suonando {st['titolo']}, Signore."
+        return "Non c'è nulla in riproduzione che io possa vedere, Signore."
+
+    # --- avvio della musica ---
+    if t == "radio":
+        nome = i.get("nome") or RADIO_PREFERITA
+        if not nome:
+            return "Quale radio vuole ascoltare, Signore?"
+        return "" if riproduci_radio(nome) else f"Non riesco a trovare la radio {nome}, Signore."
+    if t == "musica_locale":
+        files = musica.trova_musica(MUSICA_CARTELLE)
+        if files and LETTORE.riproduci_lista(files, titolo="La mia musica"):
+            return ""
+        if RADIO_PREFERITA and riproduci_radio(RADIO_PREFERITA):
+            return ""
+        return "Non ho musica sulla tablet né una radio preferita, Signore. Provi con: metti radio deejay."
+    if t == "cerca_musica":
+        if not MUSICA_YOUTUBE or not musica.youtube_disponibile():
+            return "Per cercare musica su internet serve yt-dlp, Signore."
+        return "" if LETTORE.riproduci(musica.sorgente_youtube(i["query"]), titolo=i["query"]) else "Non riesco ad avviare la musica, Signore."
+
+    # --- apri app ---
+    if t == "apri_app":
+        nome = i["nome"]
+        for chiave, pacchetto in LISTA_APP.items():
+            if chiave == nome or chiave in nome or nome in chiave:
+                threading.Thread(target=lancia_applicazione, args=(pacchetto,)).start()
+                return ""
+        return None
+    return None
+
+
+def _alle(h, m):
+    if (h, m) == (0, 0):
+        return "a mezzanotte"
+    return ("all'una" if h == 1 else f"alle {h}") + (f" e {m}" if m else "")
+
+
+def benvenuto():
+    """Il saluto al ritorno ("wake up, daddy's home"), con il prossimo impegno se c'e'."""
+    testo = "Bentornato a casa, Signore."
+    ora = adesso()
+    with LOCK_CACHE:
+        futuri = [e for e in CACHE["eventi"] if e["inizio"] > ora]
+    if futuri:
+        e = futuri[0]
+        quando = _giorno_relativo(e["inizio"])
+        testo += f" Il prossimo impegno è {e['titolo']}, {quando}"
+        testo += "." if e["tutto_giorno"] else f" {_alle(e['inizio'].hour, e['inizio'].minute)}."
+    return testo
+
+
+def risveglia():
+    """Risveglio a voce dal riposo: il saluto viene letto dalla coda degli annunci."""
+    if RIPOSO.esci() is not None:
+        ANNUNCI.put(benvenuto())
+
+
+def rispondi(testo):
+    """Un comando detto a voce: prima il riconoscimento locale (istantaneo), poi il modello."""
+    global HUD_STATO, HUD_TESTO
+    HUD_TESTO = f"Comando: {testo}"
+    try:
+        intent = comandi.interpreta(testo, app_note=tuple(LISTA_APP))
+        risposta = esegui_intent(intent) if intent else None
+    except Exception as e:
+        print(f"[COMANDO] errore: {type(e).__name__}: {e}")
+        risposta = "Non sono riuscito a eseguire il comando, Signore."
+    if risposta is not None:
+        if risposta:
+            parla(risposta)
+        else:
+            HUD_STATO = "IN ATTESA"
+            HUD_TESTO = TESTO_DEFAULT
+        return
+    gestisci_risposta_e_comandi(chiedi_a_groq(testo))
+
+
+def _e_spegnimento(frase):
+    """Spegnimento vocale ("esci", "shutdown"...), tranne le frasi di riposo come "esci dalla modalità riposo"."""
+    if not RE_SPEGNITI.search(frase):
+        return False
+    intent = comandi.interpreta(frase)
+    return not (intent and intent["tipo"] in ("riposo_entra", "riposo_esci"))
+
+
+def gestisci_attivazione(frase_udita):
+    """Wake word sentita. Restituisce True se Jarvis va spento."""
+    global HUD_STATO
+    if _e_spegnimento(frase_udita):
+        spegni_sistemi()
+        return True
+    HUD_STATO = "WAKE WORD RILEVATA"
+    os.system("termux-vibrate -d 100 > /dev/null 2>&1")
+    with LETTORE.ducking(DUCKING):  # la musica si abbassa mentre ascolto e rispondo
+        if len(frase_udita.split()) <= 2:
+            parla("Sì Signore?")
+            comando = ascolta_dinamico()
+            if not comando:
+                parla("Non ho udito alcun comando, Signore.")
+                return False
+            if _e_spegnimento(comando):
+                spegni_sistemi()
+                return True
+            rispondi(comando)
+        else:
+            rispondi(frase_udita)
+    return False
+
+
+def gestisci_parla_ora():
+    """Tocco sulla barra di stato: ascolta subito il comando, senza wake word."""
+    global HUD_STATO
+    PARLA_ORA.clear()
+    HUD_STATO = "WAKE WORD RILEVATA"
+    os.system("termux-vibrate -d 100 > /dev/null 2>&1")
+    with LETTORE.ducking(DUCKING):
+        comando = ascolta_dinamico()
+        if not comando:
+            HUD_STATO = "IN ATTESA"
+            return False
+        if _e_spegnimento(comando):
+            spegni_sistemi()
+            return True
+        rispondi(comando)
+    return False
+
+
 def spegni_sistemi():
     global HUD_STATO, HUD_TESTO
     HUD_STATO = "SPEGNIMENTO"
+    ferma_squillo()
+    LETTORE.chiudi()
     parla("Spengo i sistemi. È stato un piacere servirla, Signore.")
     HUD_STATO = "OFFLINE"
     HUD_TESTO = "Sistemi Offline."
@@ -1074,9 +1518,14 @@ def main():
 
     while True:
         svuota_annunci()
+        if PARLA_ORA.is_set():
+            if gestisci_parla_ora():
+                return
+            continue
         print(".", end="", flush=True)
         try:
-            frase_udita = ascolta_dinamico()
+            # da riposo si ascolta anche in inglese, per "wake up, daddy's home"
+            frase_udita = ascolta_dinamico(lingue=LINGUE_RIPOSO if RIPOSO.stato() else ("it-IT",))
         except Exception:
             avvia_server_audio()
             continue
@@ -1086,30 +1535,27 @@ def main():
 
         print(f"\n[Rilevato]: {frase_udita}")
 
+        # Con una sveglia o un timer che suona basta dire "stop" o "rimanda": niente wake word
+        if SQUILLO["voce"]:
+            intent = comandi.interpreta(frase_udita)
+            if intent and intent["tipo"] in ("stop", "snooze"):
+                risposta = esegui_intent(intent)
+                if risposta:
+                    parla(risposta)
+                continue
+
+        # Riposo: il risveglio vale sempre; in riposo manuale (sei fuori) si ascolta solo quello
+        stato_riposo = RIPOSO.stato()
+        if stato_riposo:
+            if comandi.e_risveglio(frase_udita):
+                risveglia()
+                continue
+            if stato_riposo == "manuale":
+                continue
+
         if RE_JARVIS.search(frase_udita):
-            if RE_SPEGNITI.search(frase_udita):
-                spegni_sistemi()
+            if gestisci_attivazione(frase_udita):
                 return
-
-            HUD_STATO = "WAKE WORD RILEVATA"
-            os.system("termux-vibrate -d 100 > /dev/null 2>&1")
-
-            if len(frase_udita.split()) <= 2:
-                parla("Sì Signore?")
-                comando_vero = ascolta_dinamico()
-                if comando_vero:
-                    if RE_SPEGNITI.search(comando_vero):
-                        spegni_sistemi()
-                        return
-                    HUD_TESTO = f"Comando: {comando_vero}"
-                    risposta = chiedi_a_groq(comando_vero)
-                    gestisci_risposta_e_comandi(risposta)
-                else:
-                    parla("Non ho udito alcun comando, Signore.")
-            else:
-                HUD_TESTO = f"Comando: {frase_udita}"
-                risposta = chiedi_a_groq(frase_udita)
-                gestisci_risposta_e_comandi(risposta)
 
 
 if __name__ == "__main__":
